@@ -53,8 +53,9 @@ def dense_stockfish_reward(
     # Convert to centipawns
     if score.is_mate():
         mate_in = score.mate()
-        # Positive mate_in = White mates in N, negative = White gets mated in N
-        cp = (10000 - abs(mate_in)) if mate_in > 0 else -(10000 - abs(mate_in))
+        # mate_in >= 0 means White mates in N (0 = already checkmate)
+        # mate_in < 0 means White gets mated in |N| moves
+        cp = (10000 - abs(mate_in)) if mate_in >= 0 else -(10000 - abs(mate_in))
     else:
         cp = score.score()
 

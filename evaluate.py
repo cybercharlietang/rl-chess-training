@@ -2,7 +2,13 @@
 
 import argparse
 import json
+import os
 
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from tqdm import tqdm
+
+from prompts import build_chat_messages
 from rewards.format_reward import extract_answer_move, has_valid_tags, is_legal_move
 
 
@@ -82,31 +88,142 @@ def print_results(results: dict) -> None:
     print(f"{'='*50}\n")
 
 
-# ── GPU-dependent code below: model loading + inference ──────────────────
+def load_model_and_tokenizer(model_path: str):
+    """Load model and tokenizer for evaluation."""
+    print(f"Loading model from {model_path} ...")
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
+
+    model = AutoModelForCausalLM.from_pretrained(
+        model_path,
+        torch_dtype=torch.bfloat16,
+        device_map="auto",
+    )
+    model.eval()
+
+    # Ensure pad token is set
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    print(f"Model loaded. Device: {model.device}")
+    return model, tokenizer
 
 
-def generate_completions(model, tokenizer, samples, batch_size=8):
-    """Generate model completions for eval samples.
+def generate_completions(
+    model,
+    tokenizer,
+    samples: list[dict],
+    batch_size: int = 8,
+    max_new_tokens: int = 2048,
+) -> list[str]:
+    """Generate model completions for eval samples using greedy decoding."""
+    completions = []
 
-    Stub — will be implemented when we have GPU access.
-    Uses greedy decoding (temperature=0) for deterministic evaluation.
-    """
-    raise NotImplementedError("Requires GPU. Implement with model.generate().")
+    for i in tqdm(range(0, len(samples), batch_size), desc="Generating"):
+        batch_samples = samples[i : i + batch_size]
+
+        # Build prompts
+        prompts = []
+        for s in batch_samples:
+            messages = build_chat_messages(s["fen"], s["legal_moves"])
+            prompt = tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=False,
+            )
+            prompts.append(prompt)
+
+        # Tokenize with left-padding for batch generation
+        tokenizer.padding_side = "left"
+        inputs = tokenizer(
+            prompts,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+        ).to(model.device)
+
+        with torch.no_grad():
+            outputs = model.generate(
+                **inputs,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,  # greedy decoding
+                temperature=None,
+                top_p=None,
+            )
+
+        # Decode only the generated tokens (strip the prompt)
+        for j, output in enumerate(outputs):
+            prompt_len = inputs["input_ids"][j].shape[0]
+            generated_ids = output[prompt_len:]
+            completion = tokenizer.decode(generated_ids, skip_special_tokens=True)
+            completions.append(completion)
+
+    return completions
+
+
+def save_detailed_results(
+    samples: list[dict],
+    completions: list[str],
+    output_path: str,
+) -> None:
+    """Save per-sample results for the visualizer."""
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    results = []
+    for sample, completion in zip(samples, completions):
+        predicted = extract_answer_move(completion)
+        solution = sample["solution_move"]
+        fen = sample["fen"]
+        is_correct = (predicted == solution) if predicted else False
+
+        results.append({
+            "fen": fen,
+            "legal_moves": sample["legal_moves"],
+            "solution_move": solution,
+            "puzzle_rating": sample["puzzle_rating"],
+            "completion": completion,
+            "predicted_move": predicted,
+            "correct": is_correct,
+            "rewards": {
+                "format": float(has_valid_tags(completion)),
+                "legal": float(is_legal_move(completion, fen)),
+            },
+        })
+
+    with open(output_path, "w") as f:
+        for r in results:
+            f.write(json.dumps(r) + "\n")
+    print(f"Saved detailed results to {output_path}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, required=True)
     parser.add_argument("--eval_data", type=str, default="data/eval.jsonl")
-    parser.add_argument("--output", type=str, default=None,
-                        help="Save results JSON to this path")
+    parser.add_argument("--output", type=str, default="outputs/eval_results.jsonl",
+                        help="Save per-sample results JSONL to this path")
+    parser.add_argument("--batch_size", type=int, default=8)
+    parser.add_argument("--max_new_tokens", type=int, default=2048)
     args = parser.parse_args()
 
     samples = load_eval_data(args.eval_data)
     print(f"Loaded {len(samples)} eval samples.")
 
-    # TODO: Load model, generate completions, evaluate
-    # completions = generate_completions(model, tokenizer, samples)
-    # results = evaluate_completions(samples, completions)
-    # print_results(results)
-    print("Model loading/inference not yet implemented (needs GPU).")
+    model, tokenizer = load_model_and_tokenizer(args.model)
+
+    completions = generate_completions(
+        model, tokenizer, samples,
+        batch_size=args.batch_size,
+        max_new_tokens=args.max_new_tokens,
+    )
+
+    results = evaluate_completions(samples, completions)
+    print_results(results)
+
+    # Save detailed per-sample results for visualizer
+    save_detailed_results(samples, completions, args.output)
+
+    # Save summary results
+    summary_path = args.output.replace(".jsonl", "_summary.json")
+    with open(summary_path, "w") as f:
+        json.dump(results, f, indent=2)
+    print(f"Saved summary to {summary_path}")

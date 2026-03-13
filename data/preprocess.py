@@ -159,7 +159,15 @@ def print_stats(samples: list[dict], label: str) -> None:
 
 
 if __name__ == "__main__":
-    train, eval_ = preprocess()
+    from config import Config
+    cfg = Config()
+    train, eval_ = preprocess(
+        num_train=cfg.num_train_samples,
+        num_eval=cfg.num_eval_samples,
+        rating_min=cfg.puzzle_rating_min,
+        rating_max=cfg.puzzle_rating_max,
+        seed=cfg.seed,
+    )
     save_jsonl(train, TRAIN_PATH)
     save_jsonl(eval_, EVAL_PATH)
     print_stats(train, "Train")

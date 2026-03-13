@@ -43,8 +43,8 @@ class Config:
     # Data
     train_data_path: str = "data/train.jsonl"
     eval_data_path: str = "data/eval.jsonl"
-    num_train_samples: int = 700
-    num_eval_samples: int = 300
+    num_train_samples: int = 7000
+    num_eval_samples: int = 3000
     puzzle_rating_min: int = 200
     puzzle_rating_max: int = 2800
 

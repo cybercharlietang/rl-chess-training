@@ -246,7 +246,7 @@ Also install Stockfish binary: `apt-get install stockfish`
 
 ## Phase 1 Status (COMPLETE)
 
-The local skeleton is done. All non-GPU code is implemented and tested (29 tests passing):
+The local skeleton is done. All non-GPU code is implemented and tested:
 - Data pipeline: `data/download.py`, `data/preprocess.py` (reservoir sampling, ~30s for 5.8M rows)
 - Rewards: `rewards/sparse.py`, `rewards/dense_stockfish.py`, `rewards/format_reward.py`
 - Prompts: `prompts.py` (Qwen3 chat format, `<think>`/`<answer>` tags)
@@ -256,39 +256,60 @@ The local skeleton is done. All non-GPU code is implemented and tested (29 tests
 - Config: `config.py` (all hyperparams as dataclass)
 - Tests: `tests/` (29 tests covering preprocess, rewards, prompts)
 
-Data is currently set to 700 train / 300 eval for fast iteration. Scale to 7k/3k or higher for real training runs by updating `config.py`.
+## Phase 2 Status (IN PROGRESS)
 
-## Phase 2: GPU Instructions (RunPod B200)
+Running on RunPod B200 (192GB HBM3e). Steps 1-3 are complete, step 4 is blocked on HuggingFace auth.
 
-Follow these steps in order:
-
-### Step 1: Environment setup
+### Step 1: Environment setup — DONE
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 apt-get install stockfish
 ```
+Installed versions: torch 2.10.0 (CUDA 12.8), transformers 5.3.0, trl 0.29.0, peft 0.18.1, python-chess 1.11.2, Stockfish 16 at `/usr/games/stockfish`. Also installed pytest (not in requirements.txt).
 
-### Step 2: Download and preprocess data
+### Step 2: Download and preprocess data — DONE
 ```bash
-python -m data.download
-# Update config.py: num_train_samples=7000, num_eval_samples=3000 (or higher)
-python -m data.preprocess
+python -m data.download      # 1GB CSV, 5.8M puzzles
+python -m data.preprocess    # 7k train / 3k eval
 ```
+- Updated `config.py`: `num_train_samples=7000, num_eval_samples=3000`
+- Fixed `data/preprocess.py` `__main__` to read sample counts from `Config` instead of hardcoded defaults
+- Data files generated: `data/train.jsonl` (7000 samples), `data/eval.jsonl` (3000 samples)
+- Rating distribution is well-spread across 400-2800 Elo, avg ~28 legal moves per position
+- Note: `data/lichess_puzzles.csv` (1GB) and `data/*.jsonl` are not committed — regenerate with the above commands
 
-### Step 3: Test Stockfish reward (not tested locally — needs binary)
-```bash
-python -m pytest tests/ -v
-```
-Write and run tests for `dense_stockfish.py`: centipawn→sigmoid normalization, Black perspective flipping, mate scores, illegal moves → -1.0.
+### Step 3: Test Stockfish reward — DONE
+**Bug found and fixed in `rewards/dense_stockfish.py`:**
+- Line 57: mate score handling used `mate_in > 0` but `mate_in = 0` means checkmate already delivered (Stockfish returns `Mate(+0)`). This was incorrectly treated as "getting mated" (reward ≈ 0) instead of "delivered mate" (reward ≈ 1). Fixed to `mate_in >= 0`.
 
-### Step 4: Baseline evaluation (zero-shot, no training)
+Added 10 new tests in `tests/test_rewards.py` for `dense_stockfish_reward()`:
+- Illegal/nonsense moves → -1.0
+- Legal moves → reward in [0, 1]
+- Move quality ordering (e4 > h4 from starting position)
+- Black perspective flipping (e5 > h5 after 1. e4)
+- Mate-in-one → reward > 0.99
+- Winning positions → high reward
+- Sigmoid normalization math
+
+**All 39 tests pass** (29 original + 10 new Stockfish tests).
+
+### Step 4: Baseline evaluation — BLOCKED on HuggingFace auth
+`evaluate.py` is fully implemented (no more stubs):
+- `load_model_and_tokenizer()`: loads model in bf16 with `device_map="auto"`
+- `generate_completions()`: batched greedy decoding, left-padded, `enable_thinking=False` in chat template
+- `save_detailed_results()`: writes per-sample JSONL for the visualizer (fen, completion, predicted move, correct, reward breakdown)
+- Saves both detailed results (`outputs/eval_results.jsonl`) and summary (`outputs/eval_results_summary.json`)
+
+**To unblock:** authenticate with HuggingFace before running:
 ```bash
+source .venv/bin/activate
+huggingface-cli login   # paste your HF token
 python evaluate.py --model Qwen/Qwen3-8B-Instruct
 ```
-Fill in the GPU stubs in `evaluate.py` to load the model and generate completions. Use greedy decoding (temperature=0). Save results to `outputs/eval_results.jsonl` for the visualizer. Expect ~5-10% puzzle accuracy.
+Expect ~5-10% puzzle accuracy on zero-shot baseline.
 
-### Step 5: Wire up training script
+### Step 5: Wire up training script — TODO
 Fill in GPU stubs in `train_grpo.py`:
 1. Load Qwen3-8B-Instruct + tokenizer (disable native thinking: `enable_thinking=False`)
 2. Apply LoRA via peft (rank 64, alpha 128, target modules in config)
@@ -296,19 +317,21 @@ Fill in GPU stubs in `train_grpo.py`:
 4. Set up wandb logging
 5. Write GRPO training log to `outputs/grpo_training_log.jsonl` for the visualizer (per-prompt group: all G completions, rewards, advantages)
 
-### Step 6: Train sparse rewards
+**Important note on TRL version:** trl 0.29.0 is installed (much newer than the 0.14.0 minimum in requirements.txt). The `GRPOTrainer` API may have changed significantly. Check the latest docs/source before implementing.
+
+### Step 6: Train sparse rewards — TODO
 ```bash
 python train_grpo.py --reward_mode sparse
 ```
 Expect: format compliance improves, puzzle accuracy stays near zero (replicates Chess-R1 finding). This validates the pipeline end-to-end.
 
-### Step 7: Train dense rewards
+### Step 7: Train dense rewards — TODO
 ```bash
 python train_grpo.py --reward_mode dense
 ```
 Expect: puzzle accuracy reaches 20-30% (replicates Chess-R1 finding).
 
-### Step 8: Final evaluation
+### Step 8: Final evaluation — TODO
 ```bash
 python evaluate.py --model outputs/dense_checkpoint/
 python evaluate.py --model outputs/sparse_checkpoint/
