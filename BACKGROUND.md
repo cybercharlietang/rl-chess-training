@@ -244,6 +244,77 @@ Also install Stockfish binary: `apt-get install stockfish`
 - Save LoRA adapter every 500 steps
 - Save full evaluation results as JSON after training
 
+## Phase 1 Status (COMPLETE)
+
+The local skeleton is done. All non-GPU code is implemented and tested (29 tests passing):
+- Data pipeline: `data/download.py`, `data/preprocess.py` (reservoir sampling, ~30s for 5.8M rows)
+- Rewards: `rewards/sparse.py`, `rewards/dense_stockfish.py`, `rewards/format_reward.py`
+- Prompts: `prompts.py` (Qwen3 chat format, `<think>`/`<answer>` tags)
+- Eval: `evaluate.py` (scoring logic done, inference stubbed)
+- Training: `train_grpo.py` (reward wiring done, model/trainer stubbed)
+- Visualizer: `visualizer.py` (Streamlit: data explorer, model outputs, GRPO training)
+- Config: `config.py` (all hyperparams as dataclass)
+- Tests: `tests/` (29 tests covering preprocess, rewards, prompts)
+
+Data is currently set to 700 train / 300 eval for fast iteration. Scale to 7k/3k or higher for real training runs by updating `config.py`.
+
+## Phase 2: GPU Instructions (RunPod B200)
+
+Follow these steps in order:
+
+### Step 1: Environment setup
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+apt-get install stockfish
+```
+
+### Step 2: Download and preprocess data
+```bash
+python -m data.download
+# Update config.py: num_train_samples=7000, num_eval_samples=3000 (or higher)
+python -m data.preprocess
+```
+
+### Step 3: Test Stockfish reward (not tested locally — needs binary)
+```bash
+python -m pytest tests/ -v
+```
+Write and run tests for `dense_stockfish.py`: centipawn→sigmoid normalization, Black perspective flipping, mate scores, illegal moves → -1.0.
+
+### Step 4: Baseline evaluation (zero-shot, no training)
+```bash
+python evaluate.py --model Qwen/Qwen3-8B-Instruct
+```
+Fill in the GPU stubs in `evaluate.py` to load the model and generate completions. Use greedy decoding (temperature=0). Save results to `outputs/eval_results.jsonl` for the visualizer. Expect ~5-10% puzzle accuracy.
+
+### Step 5: Wire up training script
+Fill in GPU stubs in `train_grpo.py`:
+1. Load Qwen3-8B-Instruct + tokenizer (disable native thinking: `enable_thinking=False`)
+2. Apply LoRA via peft (rank 64, alpha 128, target modules in config)
+3. Check TRL's latest `GRPOTrainer` API — adapt reward function signature to match
+4. Set up wandb logging
+5. Write GRPO training log to `outputs/grpo_training_log.jsonl` for the visualizer (per-prompt group: all G completions, rewards, advantages)
+
+### Step 6: Train sparse rewards
+```bash
+python train_grpo.py --reward_mode sparse
+```
+Expect: format compliance improves, puzzle accuracy stays near zero (replicates Chess-R1 finding). This validates the pipeline end-to-end.
+
+### Step 7: Train dense rewards
+```bash
+python train_grpo.py --reward_mode dense
+```
+Expect: puzzle accuracy reaches 20-30% (replicates Chess-R1 finding).
+
+### Step 8: Final evaluation
+```bash
+python evaluate.py --model outputs/dense_checkpoint/
+python evaluate.py --model outputs/sparse_checkpoint/
+```
+Compare against baseline. Inspect outputs in visualizer (`streamlit run visualizer.py`).
+
 ## Key things to get right
 
 1. **Move parsing:** The model outputs free-form text. You MUST robustly parse the `<answer>` tag. Handle cases where the model outputs multiple moves, no tags, malformed tags, UCI instead of SAN, etc. Use regex but also have fallbacks.
