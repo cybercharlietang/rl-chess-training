@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+data/lichess_puzzles.csv
+data/train.jsonl
+data/eval.jsonl
+outputs/
+wandb/
+*.egg-info/
