@@ -1,8 +1,8 @@
-# Chess-GRPO: Replicating and Extending Chess-R1 with Qwen3-8B
+# Chess-GRPO: Training LLMs to Play Chess via GRPO
 
 ## Goal
 
-Build a clean, self-contained codebase that trains an LLM to play chess using GRPO (Group Relative Policy Optimization) on Lichess puzzles. This replicates the Chess-R1 paper (Hwang et al., 2025) but uses **Qwen3-8B-Instruct** instead of Qwen2.5-7B.
+Build a clean, self-contained codebase that trains an LLM to play chess using GRPO (Group Relative Policy Optimization) on Lichess puzzles. This replicates the Chess-R1 paper (Hwang et al., 2025).
 
 The codebase should be suitable as a standalone GitHub project demonstrating RL for chess.
 
@@ -13,7 +13,23 @@ Chess-R1 trained Qwen2.5 and Llama3.1 models with GRPO on chess puzzles. Key fin
 - All models plateau at ~25-30% puzzle accuracy
 - RL amplifies pretraining knowledge but doesn't create new chess understanding
 
-We replicate this with a newer base model (Qwen3-8B) and a cleaner implementation using **TRL's GRPOTrainer** (not veRL, which Chess-R1 used).
+We replicate this using **DeepSeek-R1-Distill-Qwen-7B** as the base model and **TRL's GRPOTrainer** (not veRL, which Chess-R1 used).
+
+### Model Selection
+
+We evaluated three models on 100 Lichess puzzles before choosing:
+
+| Model | Accuracy | Legal Move Rate | Notes |
+|-------|----------|----------------|-------|
+| Qwen3-8B (thinking OFF) | 12% | 23% | Can't parse FEN reliably, no format compliance |
+| Qwen3-8B (thinking ON) | 0% | 0% | Burns all tokens trying to parse FEN, never answers |
+| **DeepSeek-R1-Distill-Qwen-7B** | **6%** | **66%** | Produces `<think>`/`<answer>` tags natively, strong FEN understanding |
+
+**DeepSeek-R1-Distill-Qwen-7B** was chosen because:
+1. It already uses `<think>`/`<answer>` tags natively — no need to teach format from scratch
+2. 66% legal move rate shows it understands board positions far better than Qwen3
+3. When it finishes reasoning (69% of samples), it produces well-structured output
+4. The 6% accuracy (vs 12% for Qwen3) is because many samples truncate at 4096 tokens mid-reasoning
 
 ## Hardware
 
@@ -294,49 +310,30 @@ Added 10 new tests in `tests/test_rewards.py` for `dense_stockfish_reward()`:
 
 **All 39 tests pass** (29 original + 10 new Stockfish tests).
 
-### Step 4: Baseline evaluation — BLOCKED on HuggingFace auth
-`evaluate.py` is fully implemented (no more stubs):
-- `load_model_and_tokenizer()`: loads model in bf16 with `device_map="auto"`
-- `generate_completions()`: batched greedy decoding, left-padded, `enable_thinking=False` in chat template
-- `save_detailed_results()`: writes per-sample JSONL for the visualizer (fen, completion, predicted move, correct, reward breakdown)
-- Saves both detailed results (`outputs/eval_results.jsonl`) and summary (`outputs/eval_results_summary.json`)
+### Step 4: Baseline evaluation — DONE
+Evaluated three models on 100 samples to select base model (see Model Selection above).
+Full 3000-sample Qwen3-8B baseline: 8.9% accuracy, 26.3% legal move rate, 0% format compliance.
+Switched to DeepSeek-R1-Distill-Qwen-7B based on results.
 
-**To unblock:** authenticate with HuggingFace before running:
-```bash
-source .venv/bin/activate
-huggingface-cli login   # paste your HF token
-python evaluate.py --model Qwen/Qwen3-8B-Instruct
-```
-Expect ~5-10% puzzle accuracy on zero-shot baseline.
+### Step 5: Wire up training script — DONE
+`train_grpo.py` fully implemented for TRL 0.29.0:
+- Three separate reward functions (move, format, legal) with `reward_weights`
+- Dataset as HF Dataset with chat message prompts + metadata columns
+- LoRA via peft, GRPOConfig, GRPOTrainer
+- Periodic eval and checkpoint saving
 
-### Step 5: Wire up training script — TODO
-Fill in GPU stubs in `train_grpo.py`:
-1. Load Qwen3-8B-Instruct + tokenizer (disable native thinking: `enable_thinking=False`)
-2. Apply LoRA via peft (rank 64, alpha 128, target modules in config)
-3. Check TRL's latest `GRPOTrainer` API — adapt reward function signature to match
-4. Set up wandb logging
-5. Write GRPO training log to `outputs/grpo_training_log.jsonl` for the visualizer (per-prompt group: all G completions, rewards, advantages)
+Fixed `format_reward.py`: `has_valid_tags()` now accepts completions where the opening `<think>` tag is part of the generation prompt (stripped during decoding), as long as `</think>` and `<answer>` are present.
 
-**Important note on TRL version:** trl 0.29.0 is installed (much newer than the 0.14.0 minimum in requirements.txt). The `GRPOTrainer` API may have changed significantly. Check the latest docs/source before implementing.
-
-### Step 6: Train sparse rewards — TODO
-```bash
-python train_grpo.py --reward_mode sparse
-```
-Expect: format compliance improves, puzzle accuracy stays near zero (replicates Chess-R1 finding). This validates the pipeline end-to-end.
-
-### Step 7: Train dense rewards — TODO
+### Step 6: GRPO training with dense rewards — IN PROGRESS
 ```bash
 python train_grpo.py --reward_mode dense
 ```
-Expect: puzzle accuracy reaches 20-30% (replicates Chess-R1 finding).
 
-### Step 8: Final evaluation — TODO
+### Step 7: Final evaluation — TODO
 ```bash
-python evaluate.py --model outputs/dense_checkpoint/
-python evaluate.py --model outputs/sparse_checkpoint/
+python evaluate.py --model outputs/grpo_run/final_adapter
 ```
-Compare against baseline. Inspect outputs in visualizer (`streamlit run visualizer.py`).
+Compare against baseline.
 
 ## Key things to get right
 

@@ -240,7 +240,10 @@ def page_model_outputs():
     # Full model output
     st.subheader("Model Output")
     completion = result.get("completion", "(no completion recorded)")
-    st.text_area("Raw completion", completion, height=300, disabled=True)
+    # Escape HTML tags so <think> etc. render as text
+    import html
+    escaped = html.escape(completion)
+    st.markdown(f'<pre style="white-space: pre-wrap; max-height: 600px; overflow-y: auto; background: #1e1e1e; color: #d4d4d4; padding: 12px; border-radius: 4px; font-size: 13px;">{escaped}</pre>', unsafe_allow_html=True)
 
 
 def page_grpo_training():

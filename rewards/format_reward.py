@@ -7,10 +7,17 @@ from langdetect import detect, LangDetectException
 
 
 def has_valid_tags(text: str) -> float:
-    """Check that output contains both <think> and <answer> tags."""
-    has_think = bool(re.search(r"<think>.*?</think>", text, re.DOTALL))
+    """Check that output contains reasoning and answer tags.
+
+    Accepts two patterns:
+      1. <think>...</think> ... <answer>...</answer>  (full tags in output)
+      2. ...</think> ... <answer>...</answer>  (opening <think> was in the
+         generation prompt and stripped during decoding)
+    """
+    has_think_block = bool(re.search(r"<think>.*?</think>", text, re.DOTALL))
+    has_think_close = bool(re.search(r"</think>", text))
     has_answer = bool(re.search(r"<answer>.*?</answer>", text, re.DOTALL))
-    return 1.0 if (has_think and has_answer) else 0.0
+    return 1.0 if ((has_think_block or has_think_close) and has_answer) else 0.0
 
 
 def is_english(text: str) -> float:

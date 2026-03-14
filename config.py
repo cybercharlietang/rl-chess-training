@@ -7,7 +7,7 @@ from typing import Literal
 @dataclass
 class Config:
     # Model
-    model_name: str = "Qwen/Qwen3-8B-Instruct"
+    model_name: str = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
     use_lora: bool = True
     lora_rank: int = 64
     lora_alpha: int = 128
