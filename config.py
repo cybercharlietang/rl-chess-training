@@ -17,7 +17,7 @@ class Config:
     ])
 
     # GRPO
-    num_generations: int = 16
+    num_generations: int = 8
     max_new_tokens: int = 2048
     temperature: float = 0.7
     clip_range: float = 0.2
@@ -25,8 +25,8 @@ class Config:
 
     # Training
     learning_rate: float = 1e-5
-    batch_size: int = 128
-    gradient_accumulation_steps: int = 4
+    batch_size: int = 8
+    gradient_accumulation_steps: int = 1
     num_train_epochs: int = 3
     warmup_ratio: float = 0.05
     bf16: bool = True

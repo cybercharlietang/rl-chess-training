@@ -324,43 +324,51 @@ Switched to DeepSeek-R1-Distill-Qwen-7B based on results.
 
 Fixed `format_reward.py`: `has_valid_tags()` now accepts completions where the opening `<think>` tag is part of the generation prompt (stripped during decoding), as long as `</think>` and `<answer>` are present.
 
-### Step 6: GRPO training with dense rewards — IN PROGRESS
+### Step 6: GRPO training with dense rewards — DONE (16-step pilot)
 ```bash
-python train_grpo.py --reward_mode dense
+python train_grpo.py --reward_mode dense --max_steps 16
 ```
+Config: batch_size=8, num_generations=8, LoRA rank 64, lr=1e-5, dense Stockfish rewards.
+~85s/step on B200, 16 steps completed in 23 minutes.
+
+**Training metrics (step 10 → step 16):**
+| Metric | Step 10 | Step 16 |
+|--------|---------|---------|
+| Total reward | 0.843 | 1.202 |
+| Move reward (dense) | -0.323 | -0.200 |
+| Format reward | 0.667 | 0.778 |
+| Legal move rate | 0.500 | 0.625 |
+
+**Eval results (100 samples, greedy decoding):**
+| Metric | Baseline | After 16 steps |
+|--------|----------|---------------|
+| Accuracy | 6% | 9% (+3%) |
+| Legal move rate | 66% | 53% (-13%) |
+| Format compliance | 69% | 61% (-8%) |
+| Finished reasoning | 69% | 65% (-4%) |
+| Avg completion length | 11K chars | 37K chars |
+
+**Key finding — truncation is the main bottleneck:**
+- ~30% of completions truncate at the 4096 token limit because the model gets stuck in FEN parsing loops ("Wait, no... Wait, maybe...")
+- 29/31 truncated baseline samples show this "Wait" loop pattern
+- GRPO fixed 20 previously-truncated samples but broke 24 previously-working ones (net: slightly worse)
+- Truncated completions get garbage rewards (no `<answer>` tag → move reward = -1.0)
+- For GRPO to work well, this truncation rate needs to come down
+
+**Implications for next run:**
+- Consider a larger model (14B) that may parse FEN more reliably
+- Or reduce max_completion_length to penalize verbose reasoning
+- Or add a length penalty to the reward function
+- Longer training (200+ steps) may help the model learn to avoid looping
 
 ### Step 7: Final evaluation — TODO
-```bash
-python evaluate.py --model outputs/grpo_run/final_adapter
-```
-Compare against baseline.
-
-## Key things to get right
-
-1. **Move parsing:** The model outputs free-form text. You MUST robustly parse the `<answer>` tag. Handle cases where the model outputs multiple moves, no tags, malformed tags, UCI instead of SAN, etc. Use regex but also have fallbacks.
-
-2. **Legal move validation:** Before scoring with Stockfish, verify the parsed move is legal in the current position using `python-chess`. Illegal moves get reward -1.0.
-
-3. **Stockfish evaluation perspective:** Stockfish always returns scores from White's perspective. If it's Black's turn in the puzzle, you need to negate the centipawn score before normalizing.
-
-4. **Qwen3 chat template:** Qwen3 has a specific chat template. Use `tokenizer.apply_chat_template()` to format prompts correctly. Make sure `<think>` and `<answer>` tags don't conflict with any special tokens.
-
-5. **Memory:** Qwen3-8B with LoRA rank 64, bf16, gradient checkpointing on a B200 (192GB) — this should be very comfortable. Monitor with `nvidia-smi`.
-
-6. **Reproducibility:** Set random seeds everywhere. Log the full config to wandb. Save the exact data splits.
-
-## What success looks like
-
-- Sparse reward training: model learns format compliance but puzzle accuracy stays near zero (replicates Chess-R1 finding)
-- Dense reward training: puzzle accuracy reaches 20-30% (replicates Chess-R1 finding)
-- Clear training curves in wandb showing reward increase and accuracy improvement
-- Clean, readable codebase suitable for a GitHub portfolio project
+Full evaluation on 3000 samples after longer training run.
 
 ## References
 
 - Chess-R1 paper: https://arxiv.org/abs/2507.00726
 - Chess-R1 code: https://github.com/krafton-ai/Chess-R1
 - TRL GRPO docs: https://huggingface.co/docs/trl/main/en/grpo_trainer
-- Qwen3 model: https://huggingface.co/Qwen/Qwen3-8B
+- DeepSeek-R1: https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B
 - Lichess puzzles: https://database.lichess.org
 - Stockfish: https://stockfishchess.org
