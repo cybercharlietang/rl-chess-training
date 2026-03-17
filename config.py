@@ -17,15 +17,15 @@ class Config:
     ])
 
     # GRPO
-    num_generations: int = 8
-    max_new_tokens: int = 2048
+    num_generations: int = 4
+    max_new_tokens: int = 8192
     temperature: float = 0.7
     clip_range: float = 0.2
     kl_penalty_coeff: float = 0.04
 
     # Training
     learning_rate: float = 1e-5
-    batch_size: int = 16
+    batch_size: int = 4
     gradient_accumulation_steps: int = 1
     num_train_epochs: int = 3
     warmup_ratio: float = 0.05

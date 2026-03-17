@@ -4,7 +4,7 @@ Training LLMs to play chess using GRPO (Group Relative Policy Optimization) on L
 
 ## Results
 
-Base model: **DeepSeek-R1-Distill-Qwen-7B** with LoRA (rank 64).
+Base model: **DeepSeek-R1-Distill-Qwen-14B** with LoRA (rank 64).
 
 | Metric | Baseline | After 16 GRPO steps |
 |--------|----------|-------------------|
@@ -32,7 +32,7 @@ python -m data.preprocess     # Creates data/train.jsonl (7k) and data/eval.json
 
 ### 2. Baseline evaluation
 ```bash
-python evaluate.py --model deepseek-ai/DeepSeek-R1-Distill-Qwen-7B --batch_size 16
+python evaluate.py --model deepseek-ai/DeepSeek-R1-Distill-Qwen-14B --batch_size 16
 ```
 
 ### 3. GRPO training
@@ -58,7 +58,7 @@ python evaluate.py --model outputs/grpo_run/final_adapter --batch_size 16
 python -m chess_diagnostics.run_diagnostics --model deepseek-ai/DeepSeek-R1-Distill-Qwen-14B
 
 # Run a single test
-python -m chess_diagnostics.run_diagnostics --model deepseek-ai/DeepSeek-R1-Distill-Qwen-7B --test fen_parsing
+python -m chess_diagnostics.run_diagnostics --model deepseek-ai/DeepSeek-R1-Distill-Qwen-14B --test fen_parsing
 
 # Results saved to results/diagnostics/ (JSON + HTML report)
 ```
@@ -112,7 +112,7 @@ Default weights: λ_move=1.0, λ_fmt=0.5, λ_legal=0.5
 
 ## Hardware
 
-Tested on a single NVIDIA B200 (192GB HBM3e) on RunPod. An 8B model with LoRA rank 64 in bf16 uses ~20GB VRAM during inference, ~60GB during training.
+Tested on a single NVIDIA B200 (192GB HBM3e) on RunPod. A 14B model with LoRA rank 64 in bf16 uses ~40GB VRAM during inference, ~180GB during training.
 
 ## References
 

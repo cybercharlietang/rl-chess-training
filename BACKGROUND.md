@@ -404,10 +404,10 @@ Built a 5-test diagnostic suite (`chess_diagnostics/`) to measure what the 14B m
 **Implications for GRPO:** The model has a foundation to build on — it's not pure random guessing. GRPO should focus on:
 - Reducing FEN parsing verbosity (the main source of truncation)
 - Improving move selection quality (the model can generate moves but picks poorly)
-- The 7B model is the better base for this work
+- The 14B model will be used with an 8192 token limit to reduce truncation
 
-### Step 9: Longer GRPO training on 7B — TODO
-Full training run on the 7B model with truncation mitigations.
+### Step 9: Longer GRPO training on 14B — TODO
+Full training run on the 14B model with 8192 token limit. The hypothesis is that doubling the token budget (from 4096 to 8192) will reduce truncation enough for the 14B's stronger reasoning to outperform the 7B. No length penalty or max completion length reduction for now — let the model use the full context.
 
 ## Dashboard & Visualization Preferences
 

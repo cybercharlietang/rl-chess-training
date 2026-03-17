@@ -22,7 +22,7 @@ The goal of this project is to use RL to train a LLM to play better chess.
 - **Two-phase approach:**
   1. **Local skeleton (no GPU):** Data pipeline, prompt templates, reward functions, eval script structure, config, requirements.txt. Test everything that doesn't require model inference.
   2. **GPU phase (RunPod B200):** Install full deps, load Qwen3-8B-Instruct, run baseline eval, train GRPO, evaluate.
-- **Model:** `Qwen/Qwen3-8B-Instruct` (not base). Disable native thinking mode.
+- **Model:** `deepseek-ai/DeepSeek-R1-Distill-Qwen-14B`. Token limit 8192.
 - **RL framework:** TRL (latest pip version), using `GRPOTrainer`.
 - **Build module by module**, test each piece before moving on.
 

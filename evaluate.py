@@ -203,9 +203,13 @@ if __name__ == "__main__":
                         help="Save per-sample results JSONL to this path")
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--max_new_tokens", type=int, default=2048)
+    parser.add_argument("--num_samples", type=int, default=None,
+                        help="Limit to first N eval samples (default: all)")
     args = parser.parse_args()
 
     samples = load_eval_data(args.eval_data)
+    if args.num_samples is not None:
+        samples = samples[:args.num_samples]
     print(f"Loaded {len(samples)} eval samples.")
 
     model, tokenizer = load_model_and_tokenizer(args.model)
