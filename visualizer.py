@@ -246,6 +246,270 @@ def page_model_outputs():
     st.markdown(f'<pre style="white-space: pre-wrap; max-height: 600px; overflow-y: auto; background: #1e1e1e; color: #d4d4d4; padding: 12px; border-radius: 4px; font-size: 13px;">{escaped}</pre>', unsafe_allow_html=True)
 
 
+def page_baseline_comparison():
+    """Compare baseline evaluations across models, and before/after GRPO."""
+    st.header("Baseline & GRPO Comparison")
+
+    # ── File selection ────────────────────────────────────────────────────
+    st.subheader("Load Results")
+    results_dir = "outputs"
+    available = sorted(
+        [f for f in os.listdir(results_dir) if f.endswith(".jsonl")]
+    ) if os.path.exists(results_dir) else []
+
+    if len(available) < 1:
+        st.warning("No result files found in outputs/. Run evaluations first.")
+        return
+
+    col1, col2 = st.columns(2)
+    baseline_file = col1.selectbox("Baseline results", available, key="baseline_file")
+    trained_file = col2.selectbox(
+        "Trained results (optional)", ["(none)"] + available, key="trained_file"
+    )
+
+    baseline = load_jsonl(os.path.join(results_dir, baseline_file))
+
+    has_trained = trained_file != "(none)"
+    trained = load_jsonl(os.path.join(results_dir, trained_file)) if has_trained else None
+
+    # ── Compute stats ─────────────────────────────────────────────────────
+    def compute_stats(results):
+        n = len(results)
+        correct = sum(1 for r in results if r.get("correct", False))
+        legal = sum(1 for r in results if r.get("rewards", {}).get("legal", 0) > 0)
+        format_ok = sum(1 for r in results if r.get("rewards", {}).get("format", 0) > 0)
+        finished = sum(1 for r in results if "</answer>" in r.get("completion", ""))
+        total_len = sum(len(r.get("completion", "")) for r in results)
+        return {
+            "Samples": n,
+            "Accuracy": f"{correct/n:.0%}",
+            "Legal Move Rate": f"{legal/n:.0%}",
+            "Format Compliance": f"{format_ok/n:.0%}",
+            "Finished Reasoning": f"{finished/n:.0%}",
+            "Avg Completion Length": f"{total_len/n:.0f} chars",
+            "_correct": correct, "_legal": legal, "_format": format_ok,
+            "_finished": finished, "_n": n,
+        }
+
+    baseline_stats = compute_stats(baseline)
+
+    # ── Summary Statistics ────────────────────────────────────────────────
+    st.subheader("Summary Statistics")
+
+    if has_trained:
+        trained_stats = compute_stats(trained)
+        rows = ["Accuracy", "Legal Move Rate", "Format Compliance",
+                "Finished Reasoning", "Avg Completion Length"]
+        header = "| Metric | Baseline | Trained | Change |"
+        sep = "|--------|----------|---------|--------|"
+        lines = [header, sep]
+        for row in rows:
+            b_val = baseline_stats[row]
+            t_val = trained_stats[row]
+            # Compute change for percentage metrics
+            key_map = {"Accuracy": "_correct", "Legal Move Rate": "_legal",
+                       "Format Compliance": "_format", "Finished Reasoning": "_finished"}
+            if row in key_map:
+                b_pct = baseline_stats[key_map[row]] / baseline_stats["_n"] * 100
+                t_pct = trained_stats[key_map[row]] / trained_stats["_n"] * 100
+                change = f"{t_pct - b_pct:+.0f}%"
+            else:
+                change = "-"
+            lines.append(f"| {row} | {b_val} | {t_val} | {change} |")
+        st.markdown("\n".join(lines))
+    else:
+        rows = ["Accuracy", "Legal Move Rate", "Format Compliance",
+                "Finished Reasoning", "Avg Completion Length"]
+        header = "| Metric | Value |"
+        sep = "|--------|-------|"
+        lines = [header, sep]
+        for row in rows:
+            lines.append(f"| {row} | {baseline_stats[row]} |")
+        st.markdown("\n".join(lines))
+
+    # ── Accuracy by Rating ────────────────────────────────────────────────
+    st.subheader("Accuracy by Rating Bucket")
+    buckets = [(200, 800), (800, 1200), (1200, 1600),
+               (1600, 2000), (2000, 2400), (2400, 2800)]
+
+    def bucket_accuracy(results):
+        out = {}
+        for lo, hi in buckets:
+            in_bucket = [r for r in results if lo <= r.get("puzzle_rating", 0) < hi]
+            if in_bucket:
+                out[f"{lo}-{hi}"] = sum(1 for r in in_bucket if r.get("correct")) / len(in_bucket)
+            else:
+                out[f"{lo}-{hi}"] = 0.0
+        return out
+
+    b_acc = bucket_accuracy(baseline)
+    if has_trained:
+        t_acc = bucket_accuracy(trained)
+        import pandas as pd
+        df = pd.DataFrame({"Baseline": b_acc, "Trained": t_acc})
+        st.bar_chart(df)
+    else:
+        st.bar_chart(b_acc)
+
+    # ── Truncation Cross-tab ──────────────────────────────────────────────
+    if has_trained:
+        st.subheader("Truncation Cross-tab")
+        # Match samples by index (assumes same eval set, same order)
+        n_pairs = min(len(baseline), len(trained))
+        bf_tf = bf_tt = bt_tf = bt_tt = 0
+        for i in range(n_pairs):
+            b_fin = "</answer>" in baseline[i].get("completion", "")
+            t_fin = "</answer>" in trained[i].get("completion", "")
+            if b_fin and t_fin:
+                bf_tf += 1
+            elif b_fin and not t_fin:
+                bf_tt += 1
+            elif not b_fin and t_fin:
+                bt_tf += 1
+            else:
+                bt_tt += 1
+
+        cross_md = f"""
+|  | Trained Finished | Trained Truncated |
+|--|-----------------|-------------------|
+| **Baseline Finished** | {bf_tf} | {bf_tt} |
+| **Baseline Truncated** | {bt_tf} | {bt_tt} |
+"""
+        st.markdown(cross_md)
+
+    # ── Side-by-Side Sample Browser ───────────────────────────────────────
+    st.subheader("Side-by-Side Comparison" if has_trained else "Sample Browser")
+
+    # Filters
+    if has_trained:
+        n_pairs = min(len(baseline), len(trained))
+        filter_opts = [
+            "All",
+            "Baseline truncated",
+            "Baseline finished",
+            "Trained truncated",
+            "Trained finished",
+            "Both truncated",
+            "Truncated->Finished",
+            "Finished->Truncated",
+        ]
+        selected_filter = st.radio("Filter", filter_opts, horizontal=True)
+
+        indices = []
+        for i in range(n_pairs):
+            b_fin = "</answer>" in baseline[i].get("completion", "")
+            t_fin = "</answer>" in trained[i].get("completion", "")
+            if selected_filter == "All":
+                indices.append(i)
+            elif selected_filter == "Baseline truncated" and not b_fin:
+                indices.append(i)
+            elif selected_filter == "Baseline finished" and b_fin:
+                indices.append(i)
+            elif selected_filter == "Trained truncated" and not t_fin:
+                indices.append(i)
+            elif selected_filter == "Trained finished" and t_fin:
+                indices.append(i)
+            elif selected_filter == "Both truncated" and not b_fin and not t_fin:
+                indices.append(i)
+            elif selected_filter == "Truncated->Finished" and not b_fin and t_fin:
+                indices.append(i)
+            elif selected_filter == "Finished->Truncated" and b_fin and not t_fin:
+                indices.append(i)
+
+        st.write(f"**{len(indices)}** samples match filter")
+
+        for idx in indices:
+            b = baseline[idx]
+            t = trained[idx]
+            b_fin = "</answer>" in b.get("completion", "")
+            t_fin = "</answer>" in t.get("completion", "")
+            b_status = "CORRECT" if b.get("correct") else "WRONG"
+            t_status = "CORRECT" if t.get("correct") else "WRONG"
+            b_trunc = "FINISHED" if b_fin else "TRUNCATED"
+            t_trunc = "FINISHED" if t_fin else "TRUNCATED"
+
+            label = (f"Sample {idx} | Rating: {b.get('puzzle_rating', '?')} | "
+                     f"Solution: {b['solution_move']} | "
+                     f"Baseline: {b_status} {b_trunc} -> Trained: {t_status} {t_trunc}")
+
+            with st.expander(label):
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown("**Baseline**")
+                    predicted_b = b.get("predicted_move", "(none)")
+                    svg_b = render_board(b["fen"], predicted_b)
+                    st.markdown(svg_b, unsafe_allow_html=True)
+                    st.markdown(f"Predicted: `{predicted_b}`")
+                    import html as html_mod
+                    st.markdown(
+                        f'<pre style="white-space: pre-wrap; max-height: 400px; overflow-y: auto; '
+                        f'background: #1e1e1e; color: #d4d4d4; padding: 8px; border-radius: 4px; '
+                        f'font-size: 12px;">{html_mod.escape(b.get("completion", ""))}</pre>',
+                        unsafe_allow_html=True,
+                    )
+                with col2:
+                    st.markdown("**Trained**")
+                    predicted_t = t.get("predicted_move", "(none)")
+                    svg_t = render_board(t["fen"], predicted_t)
+                    st.markdown(svg_t, unsafe_allow_html=True)
+                    st.markdown(f"Predicted: `{predicted_t}`")
+                    st.markdown(
+                        f'<pre style="white-space: pre-wrap; max-height: 400px; overflow-y: auto; '
+                        f'background: #1e1e1e; color: #d4d4d4; padding: 8px; border-radius: 4px; '
+                        f'font-size: 12px;">{html_mod.escape(t.get("completion", ""))}</pre>',
+                        unsafe_allow_html=True,
+                    )
+    else:
+        # Single model browser
+        filter_opts = ["All", "Correct", "Incorrect", "Finished", "Truncated"]
+        selected_filter = st.radio("Filter", filter_opts, horizontal=True)
+
+        indices = []
+        for i, b in enumerate(baseline):
+            b_fin = "</answer>" in b.get("completion", "")
+            if selected_filter == "All":
+                indices.append(i)
+            elif selected_filter == "Correct" and b.get("correct"):
+                indices.append(i)
+            elif selected_filter == "Incorrect" and not b.get("correct"):
+                indices.append(i)
+            elif selected_filter == "Finished" and b_fin:
+                indices.append(i)
+            elif selected_filter == "Truncated" and not b_fin:
+                indices.append(i)
+
+        st.write(f"**{len(indices)}** samples match filter")
+
+        for idx in indices:
+            b = baseline[idx]
+            b_fin = "</answer>" in b.get("completion", "")
+            b_status = "CORRECT" if b.get("correct") else "WRONG"
+            b_trunc = "FINISHED" if b_fin else "TRUNCATED"
+
+            label = (f"Sample {idx} | Rating: {b.get('puzzle_rating', '?')} | "
+                     f"Solution: {b['solution_move']} | {b_status} {b_trunc}")
+
+            with st.expander(label):
+                col1, col2 = st.columns([1, 1])
+                with col1:
+                    predicted = b.get("predicted_move", "(none)")
+                    svg = render_board(b["fen"], predicted)
+                    st.markdown(svg, unsafe_allow_html=True)
+                with col2:
+                    st.markdown(f"**Predicted:** `{predicted}`")
+                    st.markdown(f"**Rating:** {b.get('puzzle_rating', '?')}")
+                    rewards = b.get("rewards", {})
+                    for k, v in rewards.items():
+                        st.markdown(f"- {k}: `{v:.3f}`")
+                import html as html_mod
+                st.markdown(
+                    f'<pre style="white-space: pre-wrap; max-height: 400px; overflow-y: auto; '
+                    f'background: #1e1e1e; color: #d4d4d4; padding: 8px; border-radius: 4px; '
+                    f'font-size: 12px;">{html_mod.escape(b.get("completion", ""))}</pre>',
+                    unsafe_allow_html=True,
+                )
+
+
 def page_grpo_training():
     """Inspect GRPO training: per-prompt groups, reward signals, advantages."""
     st.header("GRPO Training Inspector")
@@ -372,12 +636,17 @@ def main():
     st.set_page_config(page_title="Chess-GRPO Inspector", layout="wide")
     st.title("Chess-GRPO Inspector")
 
-    page = st.sidebar.radio("Page", ["Data Explorer", "Model Outputs", "GRPO Training"])
+    page = st.sidebar.radio(
+        "Page",
+        ["Data Explorer", "Model Outputs", "Baseline & GRPO Comparison", "GRPO Training"],
+    )
 
     if page == "Data Explorer":
         page_data_explorer()
     elif page == "Model Outputs":
         page_model_outputs()
+    elif page == "Baseline & GRPO Comparison":
+        page_baseline_comparison()
     else:
         page_grpo_training()
 

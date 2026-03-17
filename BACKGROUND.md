@@ -361,8 +361,71 @@ Config: batch_size=8, num_generations=8, LoRA rank 64, lr=1e-5, dense Stockfish 
 - Or add a length penalty to the reward function
 - Longer training (200+ steps) may help the model learn to avoid looping
 
-### Step 7: Final evaluation — TODO
-Full evaluation on 3000 samples after longer training run.
+### Step 7: 14B Model Evaluation — COMPLETED
+
+Evaluated `DeepSeek-R1-Distill-Qwen-14B` as a potential upgrade from the 7B.
+
+**Baseline comparison (100 puzzles, 4096 tokens):**
+
+| Metric | 7B Baseline | 14B Baseline |
+|--------|------------|-------------|
+| Accuracy | 6% | 5% |
+| Legal Move Rate | 66% | 51% |
+| Format Compliance | 69% | 51% |
+| Finished Reasoning | 69% | 62% |
+
+**14B is worse on every metric.** The larger model's extended reasoning produces more FEN parsing loops, not better chess play.
+
+**10-step GRPO pilot on 14B (batch=16, dense rewards):**
+- Reward improved slightly but overall worse than the 7B pilot
+- VRAM: 181.7 / 183.4 GB — nearly maxed out at batch_size=16
+
+**Conclusion:** Do not scale within the DeepSeek-R1-Distill family. Go back to 7B.
+
+### Step 8: Diagnostic Test Suite — COMPLETED
+
+Built a 5-test diagnostic suite (`chess_diagnostics/`) to measure what the 14B model actually understands about chess. Results (4096 tokens, color-explicit prompts, strict scoring):
+
+| Test | Score | Baseline | Interpretation |
+|------|-------|----------|---------------|
+| Declarative Rules Knowledge | **88%** | 0% | Knows chess rules in theory |
+| FEN → Piece Identification | **76%** | 7.7% | Can decode FEN notation |
+| Legal Move Generation | **66% F1** | 0% | Can enumerate moves for a piece |
+| Move Legality Judgment | **56%** | 50% | Near-random at verifying legality |
+| One-Move Consequence | **87%** | 7.7% | Can track board state after a move |
+
+**Key findings:**
+1. The model has strong declarative knowledge (88%) but a gap between knowing rules and applying them compositionally.
+2. FEN parsing works (76%) but requires extensive chain-of-thought (~1000+ tokens for simple positions).
+3. It can enumerate legal moves (66% F1) and track consequences (87%) — procedural tasks amenable to step-by-step reasoning.
+4. It cannot judge move legality (56%, near random) — this requires compositional reasoning about blocking, pins, and checks.
+5. Color disambiguation in prompts is critical: saying "it is black's turn, after black plays Kg8" vs just "after Kg8 is played" improved consequence tracking from 40% → 87%.
+
+**Implications for GRPO:** The model has a foundation to build on — it's not pure random guessing. GRPO should focus on:
+- Reducing FEN parsing verbosity (the main source of truncation)
+- Improving move selection quality (the model can generate moves but picks poorly)
+- The 7B model is the better base for this work
+
+### Step 9: Longer GRPO training on 7B — TODO
+Full training run on the 7B model with truncation mitigations.
+
+## Dashboard & Visualization Preferences
+
+**Serving method:** Static HTML served on port 8888 via RunPod proxy. Do NOT use Streamlit — it doesn't work through RunPod's proxy.
+- URL pattern: `https://{RUNPOD_POD_ID}-8888.proxy.runpod.net/comparison.html`
+- Get pod ID from `$RUNPOD_POD_ID` env var
+- Serve with: `python3 -m http.server 8888 --directory /root/rl-chess-training`
+- Generate reports with: `python generate_html_report.py`
+
+**Dashboard format for evaluation results:**
+- **Summary Statistics table:** Accuracy, Legal Move Rate, Format Compliance, Finished Reasoning, Avg Completion Length
+- **Accuracy by Rating Bucket table**
+- **Truncation Cross-tab** (when comparing before/after GRPO): 2x2 matrix of Baseline Finished/Truncated vs Trained Finished/Truncated
+- **Training Curve** (during GRPO): Total Reward, Move Reward, Format Reward, Legal Move Rate at each logged step, with a graph
+- **Side-by-Side Sample Browser:** Per-sample list with rating, solution, status (CORRECT/WRONG), truncation (FINISHED/TRUNCATED), expandable completions
+- **Chess board rendering:** Each sample should show the board position (SVG) with the solution move highlighted (green arrow), oriented from the side to move's perspective
+- **Full model output:** Never truncate completions in the report — show the entire model output for each sample
+- **Sample detail view:** Board SVG + FEN + solution + predicted move + rating, followed by the full model completion text
 
 ## References
 

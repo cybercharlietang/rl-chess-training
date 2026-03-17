@@ -7,7 +7,7 @@ from typing import Literal
 @dataclass
 class Config:
     # Model
-    model_name: str = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
+    model_name: str = "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B"
     use_lora: bool = True
     lora_rank: int = 64
     lora_alpha: int = 128
@@ -25,7 +25,7 @@ class Config:
 
     # Training
     learning_rate: float = 1e-5
-    batch_size: int = 8
+    batch_size: int = 16
     gradient_accumulation_steps: int = 1
     num_train_epochs: int = 3
     warmup_ratio: float = 0.05
