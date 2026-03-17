@@ -52,10 +52,23 @@ python train_grpo.py --reward_mode dense --max_steps 16
 python evaluate.py --model outputs/grpo_run/final_adapter --batch_size 16
 ```
 
-### 5. Visualize results
+### 5. Diagnostic tests (chess understanding)
 ```bash
-pip install streamlit
-streamlit run visualizer.py
+# Run all 5 diagnostic tests on a model
+python -m chess_diagnostics.run_diagnostics --model deepseek-ai/DeepSeek-R1-Distill-Qwen-14B
+
+# Run a single test
+python -m chess_diagnostics.run_diagnostics --model deepseek-ai/DeepSeek-R1-Distill-Qwen-7B --test fen_parsing
+
+# Results saved to results/diagnostics/ (JSON + HTML report)
+```
+
+### 6. Visualize results
+```bash
+# HTML reports (works on RunPod)
+python generate_html_report.py --baseline outputs/eval_results.jsonl
+python3 -m http.server 8888 --directory .
+# Access at https://{RUNPOD_POD_ID}-8888.proxy.runpod.net/comparison.html
 ```
 
 ## Architecture
@@ -65,6 +78,7 @@ streamlit run visualizer.py
 ├── prompts.py                # Chat prompt template with <think>/<answer> tags
 ├── train_grpo.py             # GRPO training (TRL GRPOTrainer + LoRA)
 ├── evaluate.py               # Evaluation on held-out puzzles
+├── generate_html_report.py   # Standalone HTML report generator
 ├── visualizer.py             # Streamlit app for inspecting results
 ├── data/
 │   ├── download.py           # Download Lichess puzzle CSV
@@ -73,6 +87,16 @@ streamlit run visualizer.py
 │   ├── sparse.py             # Binary reward: correct move or not
 │   ├── dense_stockfish.py    # Stockfish eval → sigmoid-normalized [0,1]
 │   └── format_reward.py      # Tag compliance + English + legal move check
+├── chess_diagnostics/         # 5-test diagnostic suite
+│   ├── run_diagnostics.py    # CLI entry point
+│   ├── test_fen_parsing.py   # Test 1: FEN → piece identification
+│   ├── test_legal_moves.py   # Test 2: legal move generation per piece
+│   ├── test_legality.py      # Test 3: move legality judgment
+│   ├── test_consequences.py  # Test 4: board state after one move
+│   ├── test_rules_knowledge.py # Test 5: declarative chess rules
+│   ├── position_generator.py # Generate simple test positions
+│   ├── model_utils.py        # Model loading and inference
+│   └── report.py             # HTML report generation
 └── tests/                    # 39 tests covering rewards, data, prompts
 ```
 
