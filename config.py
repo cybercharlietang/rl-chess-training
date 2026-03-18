@@ -50,7 +50,7 @@ class Config:
 
     # Output
     output_dir: str = "outputs"
-    save_steps: int = 500
+    save_steps: int = 10
     logging_steps: int = 1
 
     # Reproducibility

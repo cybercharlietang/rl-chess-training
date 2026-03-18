@@ -114,5 +114,15 @@ GRPO with only 2 completions per prompt still showed reward improvement (1.46 �
 ### Easy puzzles first is a sound curriculum strategy
 Training on puzzles rated <1200 (2043 samples) showed clear improvement in format compliance and legal move rate within 20 steps. Starting with easy puzzles means the model gets more positive reward signal (it can actually solve some of them), which gives GRPO better gradients to learn from. Scale up to harder puzzles once the model has learned basic formatting and move selection.
 
+### Pre-launch checklist for GPU training runs
+Before every training launch, verify:
+1. **VRAM is clear** — `nvidia-smi` shows 0 MiB. Kill stale processes first.
+2. **`save_steps` matches run length** — if running N steps, set `save_steps` ≤ N/2 so you never lose more than half the work on a crash or force-kill. We lost an entire 20-step overnight run because `save_steps=500` was left over from a 5000-step plan.
+3. **No `tee` in launch scripts** — it buffers output and can mask errors. Use `> log 2>&1`.
+4. **Plan the full run upfront** — don't chain multiple short runs that each reload the model. Each relaunch costs ~10 min of loading overhead and risks zombie processes holding VRAM. If you want 60 steps, run 60 steps, not 10+50.
+5. **Test adapter loading** before committing to a long run — verify the adapter loads and training starts (step 1 completes) before walking away.
+
+This cost us ~5 hours of wasted GPU time across multiple failed launches.
+
 ### Step time varies significantly — don't extrapolate from step 1
 Step 1 took 7.4 min (includes compilation, warmup). Step 2 took 5.4 min. Later steps averaged ~10 min as the model produced longer completions during training. Always wait for 3-5 steps before estimating total runtime.

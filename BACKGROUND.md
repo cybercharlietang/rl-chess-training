@@ -406,8 +406,29 @@ Built a 5-test diagnostic suite (`chess_diagnostics/`) to measure what the 14B m
 - Improving move selection quality (the model can generate moves but picks poorly)
 - The 14B model will be used with an 8192 token limit to reduce truncation
 
-### Step 9: Longer GRPO training on 14B — TODO
-Full training run on the 14B model with 8192 token limit. The hypothesis is that doubling the token budget (from 4096 to 8192) will reduce truncation enough for the 14B's stronger reasoning to outperform the 7B. No length penalty or max completion length reduction for now — let the model use the full context.
+### Step 9: GRPO training on 14B with easy puzzles — IN PROGRESS
+
+**Config:** batch_size=4, num_generations=2, max_new_tokens=8192, lr=1e-5, dense Stockfish rewards, easy puzzles only (<1200 rating, 2043 samples).
+
+**Completed runs:**
+- **20-step run** (from base model): `outputs/grpo_easy/final_adapter` — reward 1.46→1.63, format 84%→87%, legal 73%→78%. Logged at steps 10 and 20 only (logging_steps=10).
+- **10-step run** (from 20-step adapter): `outputs/grpo_easy_r2/final_adapter` — reward per step: 0.71, 1.54, 1.45, 2.34, 2.76, 1.68, 0.73, 0.05, 2.51, 0.91. Logged every step.
+- **20-step overnight run** (from 30-step adapter): Completed 20 steps but adapter was **lost** — force-killed with save_steps=500 so no checkpoint was written. Metrics logged in `outputs/overnight_full.log`.
+
+**Best saved adapter:** `outputs/grpo_easy_r2/final_adapter` (30 total steps from base).
+
+**Key findings at 8192 tokens:**
+- Format compliance: 51% (baseline) → 87% (after training)
+- Legal move rate: 51% (baseline) → 78% (after training)
+- Avg completion length: ~3600 tokens (well within 8192 budget, most terminate naturally)
+- The 8192 token limit largely solved the truncation problem that plagued the 4096-token runs
+
+**Infrastructure lessons (expensive):**
+- Always kill stale GPU processes before launching — zombie processes hold VRAM
+- Set save_steps proportional to run length (now save_steps=10)
+- Don't chain short runs; plan total steps upfront to avoid relaunch overhead
+- Don't use `tee` in launch scripts — it masks errors
+- See LESSONS.md for full pre-launch checklist
 
 ## Dashboard & Visualization Preferences
 

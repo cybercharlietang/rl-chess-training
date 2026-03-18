@@ -4,9 +4,11 @@ import argparse
 import json
 import math
 import os
+import sys
 import time
 
 import chess
+import subprocess
 import torch
 from datasets import Dataset
 from peft import LoraConfig
@@ -142,6 +144,32 @@ def main():
     if args.train_data:
         config.train_data_path = args.train_data
     output_dir = args.output_dir or os.path.join(config.output_dir, "grpo_run")
+
+    # ── GPU sanity check ─────────────────────────────────────────────
+    if torch.cuda.is_available():
+        vram_used_mb = torch.cuda.mem_get_info()[1] - torch.cuda.mem_get_info()[0]
+        vram_used_mb //= 1024 * 1024
+        if vram_used_mb > 1000:  # >1GB already in use
+            # Check for other python processes using the GPU
+            try:
+                result = subprocess.run(
+                    ["nvidia-smi", "--query-compute-apps=pid,used_memory", "--format=csv,noheader"],
+                    capture_output=True, text=True,
+                )
+                other_procs = [l.strip() for l in result.stdout.strip().split("\n") if l.strip()]
+                my_pid = os.getpid()
+                other_procs = [p for p in other_procs if not p.startswith(str(my_pid))]
+                if other_procs:
+                    print(f"ERROR: Other processes are using the GPU:")
+                    for p in other_procs:
+                        print(f"  {p}")
+                    print(f"Kill them first to avoid OOM. Aborting.")
+                    sys.exit(1)
+            except FileNotFoundError:
+                pass  # nvidia-smi not available
+        print(f"GPU check passed: {vram_used_mb} MB VRAM in use")
+    else:
+        print("WARNING: No CUDA GPU detected")
 
     print(f"{'='*60}")
     print(f"GRPO Training")
