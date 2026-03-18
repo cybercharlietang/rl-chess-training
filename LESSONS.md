@@ -99,3 +99,20 @@ Streamlit doesn't work through RunPod's proxy. Use static HTML served on port 88
 
 ### Always show full model output in reports
 Never truncate completions in diagnostic reports. The full chain-of-thought reveals *why* the model fails — is it looping? Misunderstanding FEN? Getting the right intermediate result but failing to conclude? Truncated output hides these patterns and leads to wrong conclusions about model capability.
+
+### Use the actual field names from the data, not assumed ones
+When writing report generators, read the data first to check field names. The diagnostic JSON uses `accuracy` (not `score`), `is_correct` (not `correct`), `raw_answer` (not `model_output`), and `correct_answer` (not `expected`). Using `.get("score", 0)` silently returned 0 for every test, producing a report with all zeros that looked plausible but was completely wrong. Always verify report output against known values before sharing.
+
+## GRPO Training
+
+### 8192 tokens dramatically reduces truncation for the 14B model
+The 14B model at 4096 tokens had 51% format compliance and 51% legal move rate — largely because ~38% of completions truncated mid-reasoning. At 8192 tokens, avg completion length was ~3,600 tokens (well within budget) and format compliance jumped to 87%, legal move rate to 78%. The model doesn't need 8192 tokens — it needs enough headroom to finish its chain-of-thought.
+
+### num_generations=2 works for piloting but is noisy
+GRPO with only 2 completions per prompt still showed reward improvement (1.46 → 1.63 over 20 steps), but the advantage signal is inherently noisy — each step only compares "this one was better/worse than the other one." For production runs, use at least 4-8 generations. For quick pilots to check if training is working at all, 2 is sufficient.
+
+### Easy puzzles first is a sound curriculum strategy
+Training on puzzles rated <1200 (2043 samples) showed clear improvement in format compliance and legal move rate within 20 steps. Starting with easy puzzles means the model gets more positive reward signal (it can actually solve some of them), which gives GRPO better gradients to learn from. Scale up to harder puzzles once the model has learned basic formatting and move selection.
+
+### Step time varies significantly — don't extrapolate from step 1
+Step 1 took 7.4 min (includes compilation, warmup). Step 2 took 5.4 min. Later steps averaged ~10 min as the model produced longer completions during training. Always wait for 3-5 steps before estimating total runtime.

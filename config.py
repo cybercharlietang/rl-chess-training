@@ -17,7 +17,7 @@ class Config:
     ])
 
     # GRPO
-    num_generations: int = 4
+    num_generations: int = 2
     max_new_tokens: int = 8192
     temperature: float = 0.7
     clip_range: float = 0.2
@@ -51,7 +51,7 @@ class Config:
     # Output
     output_dir: str = "outputs"
     save_steps: int = 500
-    logging_steps: int = 10
+    logging_steps: int = 1
 
     # Reproducibility
     seed: int = 42

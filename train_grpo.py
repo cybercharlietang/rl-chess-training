@@ -130,9 +130,17 @@ def main():
                         help="Override max training steps (default: train for full epochs)")
     parser.add_argument("--output_dir", type=str, default=None,
                         help="Override output directory")
+    parser.add_argument("--train_data", type=str, default=None,
+                        help="Override training data path")
+    parser.add_argument("--resume_from_checkpoint", type=str, default=None,
+                        help="Resume training from a checkpoint directory")
+    parser.add_argument("--adapter", type=str, default=None,
+                        help="Load a trained LoRA adapter before training (continues from finetuned weights)")
     args = parser.parse_args()
 
     config = Config(reward_mode=args.reward_mode)
+    if args.train_data:
+        config.train_data_path = args.train_data
     output_dir = args.output_dir or os.path.join(config.output_dir, "grpo_run")
 
     print(f"{'='*60}")
@@ -201,20 +209,36 @@ def main():
         per_device_eval_batch_size=config.batch_size,
     )
 
+    # ── Load model ────────────────────────────────────────────────────
+    if args.adapter:
+        # Load base model + trained LoRA adapter, then continue training
+        from peft import PeftModel
+        print(f"Loading base model {config.model_name} ...")
+        base_model = AutoModelForCausalLM.from_pretrained(
+            config.model_name, torch_dtype=torch.bfloat16,
+        )
+        print(f"Loading adapter from {args.adapter} ...")
+        model = PeftModel.from_pretrained(base_model, args.adapter, is_trainable=True)
+        model_or_name = model
+        peft_cfg = None  # LoRA already applied
+    else:
+        model_or_name = config.model_name
+        peft_cfg = peft_config
+
     # ── Trainer ──────────────────────────────────────────────────────
     trainer = GRPOTrainer(
-        model=config.model_name,
+        model=model_or_name,
         reward_funcs=reward_funcs,
         args=grpo_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        peft_config=peft_config,
+        peft_config=peft_cfg,
         processing_class=tokenizer,
     )
 
     print("Starting training...")
     start_time = time.time()
-    trainer.train()
+    trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
     elapsed = time.time() - start_time
     print(f"Training completed in {elapsed/3600:.1f} hours.")
 
