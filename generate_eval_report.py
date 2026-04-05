@@ -238,7 +238,7 @@ function toggleCard(btn) {{
             if (cfg) {{
                 boards[boardDiv.id] = Chessboard(boardDiv.id, {{
                     position: cfg.fen,
-                    pieceTheme: 'https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/img/chesspieces/wikipedia/{{piece}}.png'
+                    pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{{piece}}.png'
                 }});
             }}
         }}
