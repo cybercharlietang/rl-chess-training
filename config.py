@@ -22,7 +22,7 @@ class Config:
     max_new_tokens: int = 8192
     temperature: float = 0.7
     clip_range: float = 0.2
-    kl_penalty_coeff: float = 0.04
+    kl_penalty_coeff: float = 0.0  # no reference model — saves 28GB/GPU
 
     # Training
     learning_rate: float = 1e-5
