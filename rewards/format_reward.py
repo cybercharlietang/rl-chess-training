@@ -47,20 +47,17 @@ def extract_move(text: str) -> str | None:
     if not raw:
         return None
 
-    # Strip markdown bold markers
-    raw = raw.replace("**", "")
-
-    # Strategy 1: look for "is <move>" or "is to play <move>"
-    m = re.search(r'\bis\s+(?:to\s+(?:play|move)\s+)?([A-Za-z][a-z0-9x+#=\-]+)', raw)
-    if m and _looks_like_san(m.group(1)):
-        return m.group(1).rstrip(".,;!?:")
-
-    # Strategy 2: find first SAN-looking token in the text
-    tokens = re.findall(r'[A-Za-z][a-z0-9x+#=\-]+', raw)
-    for token in tokens:
-        clean = token.rstrip(".,;!?:")
+    # Strategy 1: bold markdown move like **Rxf7** or **Bxb5**
+    bold_matches = re.findall(r'\*\*([^*]+)\*\*', raw)
+    for bm in bold_matches:
+        clean = bm.strip().rstrip(".,;!?:")
         if _looks_like_san(clean):
             return clean
+
+    # Strategy 2: "is <SAN move>" pattern (e.g. "The best move is Bc6.")
+    m = re.search(r'\bis\s+([KQRBN]?[a-h]?[x]?[a-h][1-8][+#=]?(?:[QRBN])?)', raw)
+    if m:
+        return m.group(1).rstrip(".,;!?:")
 
     # Strategy 3: castling
     if "O-O-O" in raw:
@@ -68,9 +65,21 @@ def extract_move(text: str) -> str | None:
     if "O-O" in raw:
         return "O-O"
 
-    # Last resort: first token
-    first = raw.split()[0].rstrip(".,;!?:") if raw.split() else None
-    return first
+    # Strategy 4: first SAN-looking token on its own line (standalone move)
+    for line in raw.splitlines():
+        line = line.strip().replace("**", "")
+        if line and _looks_like_san(line.rstrip(".,;!?:")):
+            return line.rstrip(".,;!?:")
+
+    # Strategy 5: scan all tokens for first SAN match
+    # Use stricter SAN regex: piece + optional file + optional x + square + optional promo/check
+    san_re = re.compile(r'^[KQRBN]?[a-h]?x?[a-h][1-8](?:=[QRBN])?[+#]?$')
+    for token in raw.split():
+        clean = token.strip("*.,;!?:()\"'")
+        if san_re.match(clean):
+            return clean
+
+    return None
 
 
 # Keep old name as alias for backward compat with evaluate.py
