@@ -1,11 +1,17 @@
-"""Evaluate a model on held-out chess puzzles."""
+"""Evaluate a model on held-out chess puzzles.
+
+Uses data-parallel evaluation: each GPU loads a full model copy and
+processes its share of the samples independently.
+"""
 
 import argparse
 import json
 import os
+import math
 
 import chess
 import torch
+import torch.multiprocessing as mp
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel
 from tqdm import tqdm
@@ -27,15 +33,7 @@ def evaluate_completions(
     samples: list[dict],
     completions: list[str],
 ) -> dict:
-    """Score a list of model completions against puzzle solutions.
-
-    Args:
-        samples: eval dataset entries with 'solution_move', 'fen', 'puzzle_rating'
-        completions: raw model output strings (one per sample)
-
-    Returns:
-        Dict with overall metrics and per-rating-bucket accuracy.
-    """
+    """Score completions against puzzle solutions."""
     assert len(samples) == len(completions)
 
     correct = 0
@@ -56,7 +54,6 @@ def evaluate_completions(
         format_ok += int(has_valid_tags(completion) > 0)
         legal += int(is_legal_move(completion, fen) > 0)
 
-        # Bucket by rating
         for lo, hi in buckets:
             if lo <= rating < hi:
                 key = f"{lo}-{hi}"
@@ -90,81 +87,168 @@ def print_results(results: dict) -> None:
     print(f"{'='*50}\n")
 
 
-def load_model_and_tokenizer(model_path: str, base_model: str | None = None):
-    """Load model and tokenizer for evaluation.
+# ── Per-GPU worker ───────────────────────────────────────────────────────
 
-    If base_model is provided, model_path is treated as a LoRA adapter dir.
-    """
+def gpu_worker(
+    gpu_id: int,
+    model_name: str,
+    base_model: str | None,
+    samples: list[dict],
+    max_new_tokens: int,
+    batch_size: int,
+    result_dict: dict,
+):
+    """Run generation on a single GPU for a subset of samples."""
+    torch.cuda.set_device(gpu_id)
+    device = torch.device(f"cuda:{gpu_id}")
+
+    # Load model on this GPU
     if base_model:
-        print(f"Loading base model: {base_model}")
         tokenizer = AutoTokenizer.from_pretrained(base_model)
         model = AutoModelForCausalLM.from_pretrained(
-            base_model, torch_dtype=torch.bfloat16, device_map="auto",
-        )
-        print(f"Loading LoRA adapter: {model_path}")
-        model = PeftModel.from_pretrained(model, model_path)
+            base_model, torch_dtype=torch.bfloat16,
+        ).to(device)
+        model = PeftModel.from_pretrained(model, model_name)
     else:
-        print(f"Loading model: {model_path}")
-        tokenizer = AutoTokenizer.from_pretrained(model_path)
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
         model = AutoModelForCausalLM.from_pretrained(
-            model_path, torch_dtype=torch.bfloat16, device_map="auto",
-        )
+            model_name, torch_dtype=torch.bfloat16,
+        ).to(device)
 
     model.eval()
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "left"
 
-    print(f"Model loaded. Device: {model.device}")
-    return model, tokenizer
+    print(f"[GPU {gpu_id}] Model loaded, processing {len(samples)} samples")
 
-
-def generate_completions(
-    model,
-    tokenizer,
-    samples: list[dict],
-    batch_size: int = 8,
-    max_new_tokens: int = 2048,
-) -> list[str]:
-    """Generate model completions for eval samples using greedy decoding."""
     completions = []
+    for i in range(0, len(samples), batch_size):
+        batch = samples[i : i + batch_size]
 
-    for i in tqdm(range(0, len(samples), batch_size), desc="Generating"):
-        batch_samples = samples[i : i + batch_size]
-
-        # Build prompts
         prompts = []
-        for s in batch_samples:
+        for s in batch:
             messages = build_chat_messages(s["fen"], s["legal_moves"])
             prompt = tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True,
+                messages, tokenize=False, add_generation_prompt=True,
             )
             prompts.append(prompt)
 
-        # Tokenize with left-padding for batch generation
-        tokenizer.padding_side = "left"
         inputs = tokenizer(
-            prompts,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-        ).to(model.device)
+            prompts, return_tensors="pt", padding=True, truncation=True,
+        ).to(device)
 
         with torch.no_grad():
             outputs = model.generate(
                 **inputs,
                 max_new_tokens=max_new_tokens,
-                do_sample=False,  # greedy decoding
+                do_sample=False,
                 temperature=None,
                 top_p=None,
             )
 
-        # Decode only the generated tokens (strip the prompt)
         for j, output in enumerate(outputs):
             prompt_len = inputs["input_ids"][j].shape[0]
             generated_ids = output[prompt_len:]
             completion = tokenizer.decode(generated_ids, skip_special_tokens=True)
+            completions.append(completion)
+
+        done = min(i + batch_size, len(samples))
+        print(f"[GPU {gpu_id}] {done}/{len(samples)} done")
+
+    result_dict[gpu_id] = completions
+    print(f"[GPU {gpu_id}] Finished all {len(samples)} samples")
+
+
+def generate_completions_parallel(
+    model_name: str,
+    base_model: str | None,
+    samples: list[dict],
+    max_new_tokens: int,
+    batch_size_per_gpu: int,
+    num_gpus: int,
+) -> list[str]:
+    """Generate completions in parallel across GPUs."""
+    # Split samples across GPUs
+    chunk_size = math.ceil(len(samples) / num_gpus)
+    chunks = [samples[i : i + chunk_size] for i in range(0, len(samples), chunk_size)]
+
+    # Shared dict for results
+    manager = mp.Manager()
+    result_dict = manager.dict()
+
+    processes = []
+    for gpu_id, chunk in enumerate(chunks):
+        p = mp.Process(
+            target=gpu_worker,
+            args=(gpu_id, model_name, base_model, chunk,
+                  max_new_tokens, batch_size_per_gpu, result_dict),
+        )
+        p.start()
+        processes.append(p)
+
+    for p in processes:
+        p.join()
+
+    # Reassemble in order
+    completions = []
+    for gpu_id in range(len(chunks)):
+        completions.extend(result_dict[gpu_id])
+
+    return completions
+
+
+# ── Single-GPU fallback ──────────────────────────────────────────────────
+
+def generate_completions_single(
+    model_name: str,
+    base_model: str | None,
+    samples: list[dict],
+    max_new_tokens: int,
+    batch_size: int,
+) -> list[str]:
+    """Generate completions on a single GPU (or pipeline-parallel with device_map=auto)."""
+    if base_model:
+        tokenizer = AutoTokenizer.from_pretrained(base_model)
+        model = AutoModelForCausalLM.from_pretrained(
+            base_model, torch_dtype=torch.bfloat16, device_map="auto",
+        )
+        model = PeftModel.from_pretrained(model, model_name)
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name, torch_dtype=torch.bfloat16, device_map="auto",
+        )
+
+    model.eval()
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "left"
+
+    completions = []
+    for i in tqdm(range(0, len(samples), batch_size), desc="Generating"):
+        batch = samples[i : i + batch_size]
+
+        prompts = [
+            tokenizer.apply_chat_template(
+                build_chat_messages(s["fen"], s["legal_moves"]),
+                tokenize=False, add_generation_prompt=True,
+            ) for s in batch
+        ]
+
+        inputs = tokenizer(
+            prompts, return_tensors="pt", padding=True, truncation=True,
+        ).to(model.device)
+
+        with torch.no_grad():
+            outputs = model.generate(
+                **inputs, max_new_tokens=max_new_tokens,
+                do_sample=False, temperature=None, top_p=None,
+            )
+
+        for j, output in enumerate(outputs):
+            prompt_len = inputs["input_ids"][j].shape[0]
+            completion = tokenizer.decode(output[prompt_len:], skip_special_tokens=True)
             completions.append(completion)
 
     return completions
@@ -205,6 +289,8 @@ def save_detailed_results(
 
 
 if __name__ == "__main__":
+    mp.set_start_method("spawn", force=True)
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, required=True,
                         help="Model name or path to LoRA adapter dir")
@@ -213,10 +299,13 @@ if __name__ == "__main__":
     parser.add_argument("--eval_data", type=str, default="data/eval.jsonl")
     parser.add_argument("--output", type=str, default="outputs/eval_results.jsonl",
                         help="Save per-sample results JSONL to this path")
-    parser.add_argument("--batch_size", type=int, default=4)
+    parser.add_argument("--batch_size", type=int, default=4,
+                        help="Batch size per GPU")
     parser.add_argument("--max_new_tokens", type=int, default=8192)
     parser.add_argument("--n", type=int, default=None,
                         help="Limit to first N eval samples (default: all)")
+    parser.add_argument("--num_gpus", type=int, default=None,
+                        help="Number of GPUs for data-parallel eval (default: all available)")
     args = parser.parse_args()
 
     samples = load_eval_data(args.eval_data)
@@ -224,21 +313,33 @@ if __name__ == "__main__":
         samples = samples[:args.n]
     print(f"Loaded {len(samples)} eval samples.")
 
-    model, tokenizer = load_model_and_tokenizer(args.model, args.base_model)
+    num_gpus = args.num_gpus or torch.cuda.device_count()
 
-    completions = generate_completions(
-        model, tokenizer, samples,
-        batch_size=args.batch_size,
-        max_new_tokens=args.max_new_tokens,
-    )
+    if num_gpus > 1:
+        print(f"Data-parallel eval across {num_gpus} GPUs, batch_size={args.batch_size}/GPU")
+        completions = generate_completions_parallel(
+            model_name=args.model,
+            base_model=args.base_model,
+            samples=samples,
+            max_new_tokens=args.max_new_tokens,
+            batch_size_per_gpu=args.batch_size,
+            num_gpus=num_gpus,
+        )
+    else:
+        print(f"Single-GPU eval, batch_size={args.batch_size}")
+        completions = generate_completions_single(
+            model_name=args.model,
+            base_model=args.base_model,
+            samples=samples,
+            max_new_tokens=args.max_new_tokens,
+            batch_size=args.batch_size,
+        )
 
     results = evaluate_completions(samples, completions)
     print_results(results)
 
-    # Save detailed per-sample results for visualizer
     save_detailed_results(samples, completions, args.output)
 
-    # Save summary results
     summary_path = args.output.replace(".jsonl", "_summary.json")
     with open(summary_path, "w") as f:
         json.dump(results, f, indent=2)
