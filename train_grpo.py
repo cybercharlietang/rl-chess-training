@@ -140,7 +140,7 @@ def main():
         n_gpus = torch.cuda.device_count()
         for i in range(n_gpus):
             name = torch.cuda.get_device_name(i)
-            mem = torch.cuda.get_device_properties(i).total_mem / 1024**3
+            mem = torch.cuda.get_device_properties(i).total_memory / 1024**3
             print(f"  GPU {i}: {name} ({mem:.0f} GB)")
         print(f"  Total GPUs: {n_gpus}")
 
