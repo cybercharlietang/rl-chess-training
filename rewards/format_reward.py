@@ -9,30 +9,68 @@ import re
 import chess
 
 
+def _looks_like_san(token: str) -> bool:
+    """Quick check if a token could be a SAN chess move."""
+    # SAN moves: e4, Nf3, Bxb5, O-O, Qxf4+, Rxf7#, etc.
+    clean = token.strip("*.,;!?:#+ ")
+    if not clean:
+        return False
+    if clean in ("O-O", "O-O-O"):
+        return True
+    # Must start with piece letter or pawn file
+    if clean[0] in "KQRBNabcdefgh" and len(clean) >= 2:
+        return True
+    return False
+
+
 def extract_move(text: str) -> str | None:
     """Extract the predicted move from model output.
 
-    Looks for text after </think>. Falls back to last token if no
-    </think> tag is found (e.g. if model skips reasoning).
+    The model outputs <think>reasoning</think> then an answer which may be:
+      - Just the move: "Rxf7"
+      - Prose: "The best move is Rxf7"
+      - Markdown bold: "**Rxf7**"
+      - Multi-line with explanation
+
+    Strategy:
+      1. Get text after </think> (or full text if no tag)
+      2. Try to find a SAN-looking token via multiple heuristics
     """
-    # Primary: extract text after </think>
+    # Get text after </think>
     match = re.search(r"</think>\s*(.*)", text, re.DOTALL)
     if match:
         raw = match.group(1).strip()
     else:
-        # Fallback: last non-empty line
         lines = [l.strip() for l in text.strip().splitlines() if l.strip()]
         raw = lines[-1] if lines else ""
 
     if not raw:
         return None
 
-    # Take first whitespace-delimited token, strip punctuation
-    tokens = raw.split()
-    if not tokens:
-        return None
-    move = tokens[0].rstrip(".,;!?:")
-    return move if move else None
+    # Strip markdown bold markers
+    raw = raw.replace("**", "")
+
+    # Strategy 1: look for "is <move>" or "is to play <move>"
+    m = re.search(r'\bis\s+(?:to\s+(?:play|move)\s+)?([A-Za-z][a-z0-9x+#=\-]+)', raw)
+    if m and _looks_like_san(m.group(1)):
+        return m.group(1).rstrip(".,;!?:")
+
+    # Strategy 2: find first SAN-looking token in the text
+    tokens = re.findall(r'[A-Za-z][a-z0-9x+#=\-]+', raw)
+    for token in tokens:
+        clean = token.rstrip(".,;!?:")
+        if _looks_like_san(clean):
+            return clean
+
+    # Strategy 3: castling
+    if "O-O-O" in raw:
+        return "O-O-O"
+    if "O-O" in raw:
+        return "O-O"
+
+    # Last resort: first token
+    first = raw.split()[0].rstrip(".,;!?:") if raw.split() else None
+    return first
 
 
 # Keep old name as alias for backward compat with evaluate.py
