@@ -16,28 +16,28 @@ class Config:
         "gate_proj", "up_proj", "down_proj",
     ])
 
-    # GRPO
-    num_generations: int = 2
+    # GRPO — sized for 8x H100 SXM
+    num_generations: int = 8
     max_new_tokens: int = 8192
     temperature: float = 0.7
     clip_range: float = 0.2
     kl_penalty_coeff: float = 0.04
 
-    # Training
+    # Training — 8x H100: per_device=8 (1 prompt × 8 gen), 8 GPUs = 8 prompts/step
+    # grad_accum=4 → 32 unique prompts per optimizer step
     learning_rate: float = 1e-5
-    batch_size: int = 4
-    gradient_accumulation_steps: int = 1
+    per_device_train_batch_size: int = 8  # must be divisible by num_generations
+    gradient_accumulation_steps: int = 4
     num_train_epochs: int = 3
     warmup_ratio: float = 0.05
     bf16: bool = True
     gradient_checkpointing: bool = True
 
-    # Reward
+    # Reward — dense Stockfish + legality, no format reward
     reward_mode: Literal["sparse", "dense"] = "dense"
     stockfish_depth: int = 15
     stockfish_path: str = "/usr/games/stockfish"
     lambda_move: float = 1.0
-    lambda_fmt: float = 0.5
     lambda_legal: float = 0.5
 
     # Data

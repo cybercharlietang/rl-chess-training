@@ -4,12 +4,14 @@ import argparse
 import json
 import os
 
+import chess
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from peft import PeftModel
 from tqdm import tqdm
 
 from prompts import build_chat_messages
-from rewards.format_reward import extract_answer_move, has_valid_tags, is_legal_move
+from rewards.format_reward import extract_move, has_valid_tags, is_legal_move
 
 
 def load_eval_data(path: str) -> list[dict]:
@@ -44,7 +46,7 @@ def evaluate_completions(
                (1600, 2000), (2000, 2400), (2400, 2800)]
 
     for sample, completion in zip(samples, completions):
-        predicted = extract_answer_move(completion)
+        predicted = extract_move(completion)
         solution = sample["solution_move"]
         fen = sample["fen"]
         rating = sample["puzzle_rating"]
@@ -88,19 +90,27 @@ def print_results(results: dict) -> None:
     print(f"{'='*50}\n")
 
 
-def load_model_and_tokenizer(model_path: str):
-    """Load model and tokenizer for evaluation."""
-    print(f"Loading model from {model_path} ...")
-    tokenizer = AutoTokenizer.from_pretrained(model_path)
+def load_model_and_tokenizer(model_path: str, base_model: str | None = None):
+    """Load model and tokenizer for evaluation.
 
-    model = AutoModelForCausalLM.from_pretrained(
-        model_path,
-        torch_dtype=torch.bfloat16,
-        device_map="auto",
-    )
+    If base_model is provided, model_path is treated as a LoRA adapter dir.
+    """
+    if base_model:
+        print(f"Loading base model: {base_model}")
+        tokenizer = AutoTokenizer.from_pretrained(base_model)
+        model = AutoModelForCausalLM.from_pretrained(
+            base_model, torch_dtype=torch.bfloat16, device_map="auto",
+        )
+        print(f"Loading LoRA adapter: {model_path}")
+        model = PeftModel.from_pretrained(model, model_path)
+    else:
+        print(f"Loading model: {model_path}")
+        tokenizer = AutoTokenizer.from_pretrained(model_path)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_path, torch_dtype=torch.bfloat16, device_map="auto",
+        )
+
     model.eval()
-
-    # Ensure pad token is set
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -129,7 +139,6 @@ def generate_completions(
                 messages,
                 tokenize=False,
                 add_generation_prompt=True,
-                enable_thinking=False,
             )
             prompts.append(prompt)
 
@@ -170,7 +179,7 @@ def save_detailed_results(
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     results = []
     for sample, completion in zip(samples, completions):
-        predicted = extract_answer_move(completion)
+        predicted = extract_move(completion)
         solution = sample["solution_move"]
         fen = sample["fen"]
         is_correct = (predicted == solution) if predicted else False
@@ -197,22 +206,25 @@ def save_detailed_results(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=str, required=True)
+    parser.add_argument("--model", type=str, required=True,
+                        help="Model name or path to LoRA adapter dir")
+    parser.add_argument("--base_model", type=str, default=None,
+                        help="Base model name (required if --model is a LoRA adapter)")
     parser.add_argument("--eval_data", type=str, default="data/eval.jsonl")
     parser.add_argument("--output", type=str, default="outputs/eval_results.jsonl",
                         help="Save per-sample results JSONL to this path")
-    parser.add_argument("--batch_size", type=int, default=8)
-    parser.add_argument("--max_new_tokens", type=int, default=2048)
-    parser.add_argument("--num_samples", type=int, default=None,
+    parser.add_argument("--batch_size", type=int, default=4)
+    parser.add_argument("--max_new_tokens", type=int, default=8192)
+    parser.add_argument("--n", type=int, default=None,
                         help="Limit to first N eval samples (default: all)")
     args = parser.parse_args()
 
     samples = load_eval_data(args.eval_data)
-    if args.num_samples is not None:
-        samples = samples[:args.num_samples]
+    if args.n is not None:
+        samples = samples[:args.n]
     print(f"Loaded {len(samples)} eval samples.")
 
-    model, tokenizer = load_model_and_tokenizer(args.model)
+    model, tokenizer = load_model_and_tokenizer(args.model, args.base_model)
 
     completions = generate_completions(
         model, tokenizer, samples,

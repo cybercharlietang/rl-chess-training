@@ -1,12 +1,11 @@
-"""Prompt templates for Qwen3-8B-Instruct chess puzzles."""
+"""Prompt templates for DeepSeek-R1-Distill-Qwen-14B chess puzzles.
+
+Uses native <think> reasoning. Move is extracted from text after </think>.
+"""
 
 SYSTEM_PROMPT = (
-    "A conversation between User and Assistant. The Assistant is a professional "
-    "chess player who first thinks about the reasoning process and then provides "
-    "the answer.\n\n"
-    "The reasoning must be in <think> </think> tags. The answer must be in "
-    "<answer> </answer> tags.\n\n"
-    "The answer must be a single move in SAN notation from the legal moves list.\n\n"
+    "You are a professional chess player. Analyze the position, then output "
+    "only the best move in SAN notation.\n\n"
     "Reminder of chess rules:\n"
     "- Bishops move diagonally.\n"
     "- Rooks move horizontally or vertically.\n"
@@ -29,8 +28,8 @@ def build_user_message(fen: str, legal_moves: list[str]) -> str:
 def build_chat_messages(fen: str, legal_moves: list[str]) -> list[dict]:
     """Build the full chat message list for tokenizer.apply_chat_template().
 
-    Returns a list of {role, content} dicts ready for the Qwen3 chat template.
-    We use the system prompt as a 'system' role message, then a 'user' message.
+    DeepSeek-R1-Distill uses native <think> reasoning. We let it think
+    naturally, then extract the move from text after </think>.
     """
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
