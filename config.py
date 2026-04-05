@@ -17,17 +17,17 @@ class Config:
     ])
 
     # GRPO — sized for 8x H100 SXM
-    num_generations: int = 8
+    # 1 prompt × 4 completions per GPU, 8 GPUs = 8 prompts, 32 completions per step
+    num_generations: int = 4
     max_new_tokens: int = 8192
     temperature: float = 0.7
     clip_range: float = 0.2
     kl_penalty_coeff: float = 0.04
 
-    # Training — 8x H100: per_device=8 (1 prompt × 8 gen), 8 GPUs = 8 prompts/step
-    # grad_accum=4 → 32 unique prompts per optimizer step
+    # Training
     learning_rate: float = 1e-5
-    per_device_train_batch_size: int = 8  # must be divisible by num_generations
-    gradient_accumulation_steps: int = 4
+    per_device_train_batch_size: int = 4  # must be divisible by num_generations (4/4=1 prompt)
+    gradient_accumulation_steps: int = 1
     num_train_epochs: int = 3
     warmup_ratio: float = 0.05
     bf16: bool = True
