@@ -16,15 +16,11 @@ The goal of this project is to use RL to train a LLM to play better chess.
 - Ask questions when something is not 100% clear. Sometimes I might not cover all the details. Make sure ask questions when something is not clear, instead of making quick assumptions. I rather explain something rather than finding out that wrong assmuptions were made down the line.
 - Be critical when my reasoning or effort is lacking, however also give complements after a job well done.
 
-## Development Workflow
+## Session Startup (REQUIRED)
 
-- **Virtual environment:** `.venv` in project root (Python 3.12.3). Activate with `source .venv/bin/activate`.
-- **Two-phase approach:**
-  1. **Local skeleton (no GPU):** Data pipeline, prompt templates, reward functions, eval script structure, config, requirements.txt. Test everything that doesn't require model inference.
-  2. **GPU phase (RunPod B200):** Install full deps, load Qwen3-8B-Instruct, run baseline eval, train GRPO, evaluate.
-- **Model:** `deepseek-ai/DeepSeek-R1-Distill-Qwen-14B`. Token limit 8192.
-- **RL framework:** TRL (latest pip version), using `GRPOTrainer`.
-- **Build module by module**, test each piece before moving on.
+**Read these files before doing anything:**
+1. `LESSONS.md` — Critical lessons, especially the FSDP requirement
+2. `BACKGROUND.md` — Experiment design and specs
 
 ## Best practices
 - Do not assume I am right

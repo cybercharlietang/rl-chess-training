@@ -448,6 +448,30 @@ Built a 5-test diagnostic suite (`chess_diagnostics/`) to measure what the 14B m
 - **Full model output:** Never truncate completions in the report — show the entire model output for each sample
 - **Sample detail view:** Board SVG + FEN + solution + predicted move + rating, followed by the full model completion text
 
+## Step 10: Redesign — native reasoning, dense reward only, 8x H100 (2026-04-05/06)
+
+### Changes made
+- **Prompts:** Removed `<answer>` tags. Model uses native `<think>...</think>` reasoning. Move extracted from text after `</think>`.
+- **Rewards:** Removed format/language reward. Only dense Stockfish + legality.
+- **Move extraction:** Robust parser handles bold markdown (`**Rxf7**`), prose ("best move is Bc6"), standalone moves. See `rewards/format_reward.py`.
+- **Eval:** Data-parallel across GPUs via `torch.multiprocessing` (not `device_map="auto"`). Each GPU loads own model copy.
+- **Config:** G=4, per_device_batch=4, grad_accum=1, beta=0 (no reference model), 8192 tokens.
+
+### Baseline eval (100 puzzles, zero-shot, 8192 tokens)
+- **Accuracy: 16%, Legal: 73%**, Reasoning present: 80%
+- Data saved in `outputs/baseline_eval.jsonl`, report in `outputs/baseline_report.html`
+
+### GRPO training FAILED — DDP OOM
+Multiple attempts to run GRPO with DDP (torchrun) OOM'd on 80GB H100s. Root cause: DDP replicates full model (28GB) + backward pass activations through ~5000 token sequences exceeds 80GB. See LESSONS.md for full analysis.
+
+### NEXT STEP: Use FSDP instead of DDP
+```python
+# In GRPOConfig or accelerate config:
+fsdp = "full_shard"
+fsdp_config = {"auto_wrap_policy": "TRANSFORMER_BASED_WRAP"}
+```
+FSDP shards model across 8 GPUs (~3.5GB each). Should comfortably fit G=4, batch=4, 8192 tokens. RunPod balance: ~$75. Pod `ohc9eodnzzr4kd` stopped (volume preserved).
+
 ## References
 
 - Chess-R1 paper: https://arxiv.org/abs/2507.00726
