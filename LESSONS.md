@@ -126,3 +126,78 @@ This cost us ~5 hours of wasted GPU time across multiple failed launches.
 
 ### Step time varies significantly — don't extrapolate from step 1
 Step 1 took 7.4 min (includes compilation, warmup). Step 2 took 5.4 min. Later steps averaged ~10 min as the model produced longer completions during training. Always wait for 3-5 steps before estimating total runtime.
+
+## Session: 2026-04-05/06 — 8x H100 SXM attempt
+
+### DDP CANNOT train 14B models at 8192 tokens on 80GB GPUs — use FSDP
+
+**THIS IS THE MOST IMPORTANT LESSON. DO NOT USE DDP FOR THIS MODEL.**
+
+DDP replicates the entire model on each GPU. For a 14B bf16 model:
+- Model weights: 28GB
+- Generation (no_grad) fits: 28GB model + 13GB KV cache = 41GB ✓
+- Training backward pass DOES NOT fit: 28GB model + 6GB logits (batch × seq × 152K vocab) + 15-20GB activations + 5GB gradients = 54-59GB on top of the 28GB model = **~75-80GB → OOM**
+
+We burned ~$120 and 5+ hours on repeated OOM crashes before understanding this. The fix is **FSDP** (Fully Sharded Data Parallel):
+- Shards model across 8 GPUs: ~3.5GB of weights per GPU instead of 28GB
+- Leaves ~76GB per GPU for KV cache, activations, logits, gradients
+- Should comfortably support G=4, batch=4, 8192 tokens
+- Set via: `fsdp="full_shard"` and `fsdp_config={"auto_wrap_policy": "TRANSFORMER_BASED_WRAP"}` in GRPOConfig or accelerate config
+
+### The reference model is a hidden 28GB cost per GPU
+TRL's GRPOTrainer loads a frozen copy of the base model for KL divergence computation. With DDP that's 2 × 28GB = 56GB just for model weights. Set `beta=0.0` to skip it (confirmed: TRL lines 628-630 check `if self.beta == 0.0: self.ref_model = None`). For short test runs (<100 steps), KL regularization is unnecessary. For longer runs with FSDP, the reference model can be sharded too.
+
+### ALWAYS compute full VRAM budget before launching
+Before EVERY training launch, compute:
+```
+Per-GPU memory budget:
+  Model weights (bf16):              X GB
+  Reference model (if beta > 0):     X GB
+  DDP gradient buffers (if DDP):     X GB (= model size if not using FSDP)
+  FSDP sharded weights (if FSDP):    model_size / num_gpus GB
+  KV cache (generation phase):       num_seqs × max_tokens × per_token_cost
+  Logits (training phase):           batch × seq_len × vocab_size × 2 bytes
+  Activations (backprop):            ~1.5-2x model size with grad checkpointing
+  Optimizer states:                  ~2x trainable params (AdamW)
+  ────────────────────────────────
+  TOTAL must be < 80% of GPU VRAM
+```
+If it doesn't fit, DO NOT LAUNCH. Switch to FSDP or reduce batch/tokens first.
+
+### Data-parallel eval works well
+For evaluation (no backward pass), data parallelism via `torch.multiprocessing` is simple and effective. Each GPU loads a full model copy and processes its share of samples. 100 samples across 8 GPUs completed in ~20 min at 8192 tokens. No DDP needed for eval.
+
+### Move extraction from native `<think>` tags works — but needs robust parsing
+DeepSeek-R1-Distill produces `<think>reasoning</think>answer` reliably (23/25 samples had `</think>` in diagnostics). But the text after `</think>` is NOT just the move — it's often:
+- `"The best move is Rxf7"` — prose
+- `"**Rxf7**"` — markdown bold
+- `"The best move is to capture..."` then `**Rxf7**` on a later line
+
+Parse strategy (in priority order):
+1. Bold markdown: `**Rxf7**` → extract from `\*\*...\*\*`
+2. "is <SAN>" pattern: `\bis\s+([KQRBN]?[a-h]?x?[a-h][1-8])` 
+3. Standalone SAN on its own line
+4. First SAN-matching token in text
+
+This extraction gave 16% accuracy and 73% legal move rate on baseline (vs 0% with naive first-token extraction).
+
+### Actual generation speed on H100 SXM (measured, not theoretical)
+DeepSeek-R1-Distill-Qwen-14B on H100 80GB SXM:
+- Single sequence: **38 tok/s**
+- Batch of 4: **167 tok/s total** (42 tok/s per sequence)
+- Batch of 4 × ~5800 tokens: **193 seconds**
+- Peak VRAM (generation only, no DDP): **78.5 GB**
+
+Do NOT use theoretical "H100 does 80 tok/s" numbers. Always benchmark on the actual model + hardware.
+
+### Zombie GPU processes after OOM
+When `torchrun` child processes OOM during CUDA operations, `pkill` may not release GPU memory. Use `kill -9` on specific PIDs, or `pkill -9 python` as last resort. Always verify with `nvidia-smi` that VRAM is 0 before relaunching. If VRAM won't clear, `kill -9 -1` will kill all processes (including sshd — pod restarts).
+
+### Baseline results (reference for post-training comparison)
+- Model: DeepSeek-R1-Distill-Qwen-14B (zero-shot, no training)
+- 100 Lichess puzzles, 8192 max tokens, greedy decoding
+- **Accuracy: 16%** (16/100)
+- **Legal move rate: 73%** (73/100)
+- **Has reasoning (`</think>`): 80%**
+- Accuracy by rating: 200-800: 33%, 800-1200: 17%, 1200-1600: 5%, 1600-2000: 4%, 2000-2400: 32%, 2400-2800: 50%
+- Full data in `outputs/baseline_eval.jsonl`, interactive report in `outputs/baseline_report.html`

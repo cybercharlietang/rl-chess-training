@@ -19,7 +19,7 @@ class Config:
     # GRPO — sized for 8x H100 SXM
     # 1 prompt × 4 completions per GPU, 8 GPUs = 8 prompts, 32 completions per step
     num_generations: int = 4
-    max_new_tokens: int = 8192
+    max_new_tokens: int = 4096  # 8192 OOMs with DDP, 4096 fits in 80GB H100
     temperature: float = 0.7
     clip_range: float = 0.2
     kl_penalty_coeff: float = 0.0  # no reference model — saves 28GB/GPU
