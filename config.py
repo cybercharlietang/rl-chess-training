@@ -26,7 +26,7 @@ class Config:
 
     # Training
     learning_rate: float = 1e-5
-    per_device_train_batch_size: int = 4  # must be divisible by num_generations (4/4=1 prompt)
+    per_device_train_batch_size: int = 4  # must be divisible by num_generations (4/4=1 prompt/GPU)
     gradient_accumulation_steps: int = 1
     num_train_epochs: int = 3
     warmup_ratio: float = 0.05

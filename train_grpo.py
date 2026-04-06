@@ -206,6 +206,8 @@ def main():
         gradient_checkpointing=config.gradient_checkpointing,
         bf16=config.bf16,
         seed=config.seed,
+        # DDP: only sync LoRA gradients, not frozen base model params
+        ddp_find_unused_parameters=False,
         # GRPO-specific
         num_generations=config.num_generations,
         max_completion_length=config.max_new_tokens,
